@@ -719,7 +719,7 @@ function logo(center){
   const clickable = center ? '' : ' onclick="go(\'home\')" style="cursor:pointer"';
   return `<div class="logo${center?' center-logo':''}"${clickable}>
     <div class="logo-mark">◆</div>
-    <span class="logo-name">GameZone</span>
+    <span class="logo-name">GameTuat</span>
   </div>`;
 }
 
