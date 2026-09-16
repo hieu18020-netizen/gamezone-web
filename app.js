@@ -840,7 +840,7 @@ function leftPanel(){
     <div class="left-main">
       <div class="eyebrow">🎮 Game Online — Chơi ngay, thắng ngay</div>
       <h1>Sẵn sàng<br><span>chiến chưa?</span></h1>
-      <p>Tham gia hàng ngàn game thủ mỗi ngày — đấu rank, leo bảng, nhận thưởng.</p>
+      <p>Không có game nào khó, chỉ có người chơi ngu.</p>
       <div class="stats">
         <div class="stat"><b>84K+</b><small>Game thủ online</small></div>
         <div class="stat"><b>Top 2</b><small>Server Việt Nam</small></div>
