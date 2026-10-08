@@ -782,3 +782,36 @@ button.dock-row{cursor:pointer}
   .side-dock ~ .games-body{padding-left:0}
   .nav-mobile-only{display:inline}
 }
+
+
+/* ===== Intro bên trái trang đăng nhập: thẻ game nghiêng, nổi nhẹ ===== */
+.intro-stage{position:relative;z-index:1;flex:1;min-height:360px;margin:.5rem 0}
+.intro-ring{position:absolute;border-radius:50%;border:1px solid rgba(139,92,246,.16);pointer-events:none}
+.intro-ring-1{width:92%;aspect-ratio:1;left:-12%;top:-4%}
+.intro-ring-2{width:74%;aspect-ratio:1;left:30%;top:22%;border-color:rgba(34,211,238,.12)}
+.intro-glow{position:absolute;left:30%;top:38%;width:280px;height:280px;border-radius:50%;background:radial-gradient(circle,rgba(139,92,246,.25),transparent 65%);pointer-events:none}
+.intro-card{position:absolute;width:clamp(150px,30%,200px);aspect-ratio:.84;padding:.95rem 1.05rem;border-radius:22px;
+  background:linear-gradient(160deg,rgba(32,36,54,.96),rgba(14,16,30,.96));
+  border:1px solid color-mix(in srgb,var(--tint) 45%,transparent);
+  box-shadow:0 22px 50px rgba(0,0,0,.5),0 0 28px color-mix(in srgb,var(--tint) 14%,transparent);
+  display:flex;flex-direction:column;transform:rotate(var(--rot));animation:introFloat 6s ease-in-out infinite}
+.intro-card-tag{font-size:9.5px;font-weight:700;letter-spacing:.14em;color:#a78bfa}
+.intro-card-icon{flex:1;display:grid;place-items:center;min-height:0}
+.intro-card-name{font-family:Fraunces,Georgia,serif;font-size:clamp(1.15rem,1.7vw,1.5rem);font-weight:600;color:#f8f7f4;line-height:1.1}
+.intro-card-desc{font-size:10.5px;color:rgba(248,247,244,.45);margin-top:.3rem}
+@keyframes introFloat{0%,100%{transform:translateY(0) rotate(var(--rot))}50%{transform:translateY(-9px) rotate(var(--rot))}}
+@media(prefers-reduced-motion:reduce){.intro-card{animation:none}}
+
+.ic-tetris{display:grid;grid-template-columns:repeat(2,34px);gap:6px;transform:translateX(-4px)}
+.ic-tetris i{width:34px;height:34px;border-radius:9px;display:block;box-shadow:0 0 14px rgba(255,255,255,.12)}
+.ic-tetris i:nth-child(1){transform:translate(-8px,-4px)}
+.ic-tetris i:nth-child(2){transform:translate(4px,-8px)}
+.ic-tetris i:nth-child(3){transform:translate(-14px,6px)}
+.ic-tetris i:nth-child(4){transform:translate(2px,4px)}
+.ic-chess{font-size:76px;line-height:1;color:#f6c453;text-shadow:0 0 22px rgba(246,196,83,.45)}
+.ic-snake{width:88%;max-width:130px;filter:drop-shadow(0 0 12px rgba(52,211,153,.4))}
+.ic-2048{display:grid;grid-template-columns:repeat(2,38px);gap:7px}
+.ic-2048 b{width:38px;height:38px;border-radius:9px;display:grid;place-items:center;font-family:Fraunces,Georgia,serif;font-size:15px;font-weight:600;color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.35)}
+
+.intro-text{flex:none;padding:0 0 1.25rem;justify-content:flex-end}
+.intro-eyebrow{font-size:11px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:#a78bfa;margin-bottom:.75rem}
