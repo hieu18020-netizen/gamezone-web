@@ -107,7 +107,6 @@ let s = {
   activeChatOldestId  : null,
   activeChatHasMore   : false,
   chatSending         : false,
-  dockOpen            : { chibi: true, friends: true, messages: true }, // cột trái: mục nào đang mở
   chibiFilter         : "all",
   chibiFavorites      : new Set(),
   activeChibiCodes    : new Set(), // các mã chibi đang được chọn để chạy CÙNG LÚC trên màn hình; rỗng = chưa chọn cái nào
@@ -1343,12 +1342,10 @@ async function useChibi(code){
 // không cần render() toàn bộ.
 function updateChibiUseBtn(code){
   const btn = document.getElementById(`chibi-use-btn-${code}`);
-  if (btn) {
-    const isActive = s.activeChibiCodes.has(code);
-    btn.classList.toggle("active", isActive);
-    btn.textContent = isActive ? "😴 Đi ngủ đi" : "Sử dụng";
-  }
-  refreshDock(); // nút ở cột trái cũng đổi theo
+  if (!btn) { render(); return; } // phòng hờ: view khác/chưa có nút -> fallback render đầy đủ
+  const isActive = s.activeChibiCodes.has(code);
+  btn.classList.toggle("active", isActive);
+  btn.textContent = isActive ? "😴 Đi ngủ đi" : "Sử dụng";
 }
 
 function filteredChibiList(){
@@ -1833,119 +1830,25 @@ function navBar(){
     </nav>${sideDockHtml()}`;
 }
 
-// ================== CỘT BÊN TRÁI: Chibi · Bạn bè · Tin nhắn ==================
-// Hiện ở mọi trang sau đăng nhập (được chèn qua navBar()). Bấm tiêu đề để thu/mở,
-// bấm ↗ để mở trang đầy đủ. Dữ liệu lấy từ s.friends / s.conversations / CHIBI_GALLERY.
-function dockEmpty(icon, text){
-  return `<div class="dock-empty"><span>${icon}</span>${text}</div>`;
-}
-
-function dockSection(key, icon, title, count, bodyHtml, viewName){
-  const open = s.dockOpen[key];
-  const badge = count ? `<span class="dock-badge">${count}</span>` : "";
-  return `<section class="dock-sec${open ? " open" : ""}" data-key="${key}">
-    <div class="dock-head">
-      <button type="button" class="dock-toggle" onclick="toggleDock('${key}')">
-        <span class="dock-caret">▸</span><span class="dock-icon">${icon}</span><span class="dock-title">${title}</span>${badge}
-      </button>
-      <button type="button" class="dock-open${s.view === viewName ? " current" : ""}" onclick="go('${viewName}')" title="Mở trang đầy đủ">↗</button>
-    </div>
-    <div class="dock-body">${bodyHtml}</div>
-  </section>`;
-}
-
-function dockChibiHtml(){
-  const owned = CHIBI_GALLERY.filter(c => c.unlocked);
-  if (!owned.length) return dockEmpty("🔒", "Chưa có chibi nào");
-  return owned.map(c => {
-    const isActive = s.activeChibiCodes.has(c.code);
-    const fallback = `chibi/${c.code}/${c.frameFileName ? c.frameFileName(1) : "1.png"}`;
-    const imgSrc = c.frontImage || fallback;
-    return `<div class="dock-row">
-      <div class="dock-ava"><img src="${esc(imgSrc)}" alt="${esc(c.name)}" onerror="this.onerror=null;this.src='${esc(fallback)}'"></div>
-      <div class="dock-info">
-        <div class="dock-name">${esc(c.name)}</div>
-        <div class="dock-sub">${esc(c.desc || "")}</div>
-      </div>
-      <button type="button" class="dock-mini-btn${isActive ? " active" : ""}" onclick="useChibi('${esc(c.code)}')"
-        title="${isActive ? "Đi ngủ đi" : "Sử dụng"}">${isActive ? "😴" : "▶"}</button>
-    </div>`;
-  }).join("");
-}
-
-function dockFriendsHtml(){
-  if (!s.friendsLoaded) return dockEmpty("◌", "Đang tải...");
-  const row = (f, actions) => {
-    const name = f.display_name || "Ẩn danh";
-    return `<div class="dock-row">
-      <button type="button" class="dock-row-main" onclick="openProfile('${esc(f.public_id)}')">
-        <div class="dock-ava">${avatarHtml(f.avatar, name.slice(0, 2).toUpperCase())}</div>
-        <div class="dock-info">
-          <div class="dock-name">${esc(name)}</div>
-          <div class="dock-sub">ID: ${esc(f.public_id || "--------")}</div>
-        </div>
-      </button>${actions}
-    </div>`;
-  };
-  let html = "";
-  if (s.friendsIncoming.length) {
-    html += `<div class="dock-label">Lời mời kết bạn</div>` + s.friendsIncoming.map(f => row(f, `
-      <button type="button" class="dock-mini-btn ok" onclick="respondFriendRequest('${esc(f.public_id)}','accept')" title="Chấp nhận">✓</button>
-      <button type="button" class="dock-mini-btn no" onclick="respondFriendRequest('${esc(f.public_id)}','decline')" title="Từ chối">✕</button>`)).join("");
-  }
-  if (s.friends.length) {
-    html += (html ? `<div class="dock-label">Bạn bè</div>` : "") + s.friends.map(f => row(f, `
-      <button type="button" class="dock-mini-btn" onclick="goToChat('${esc(f.public_id)}')" title="Nhắn tin">💬</button>`)).join("");
-  } else if (!s.friendsIncoming.length) {
-    html = dockEmpty("🌌", "Chưa có bạn bè — thử tìm ở thanh trên nhé!");
-  }
-  return html;
-}
-
-function dockMessagesHtml(){
-  if (!s.conversationsLoaded) return dockEmpty("◌", "Đang tải...");
-  if (!s.conversations.length) return dockEmpty("💬", "Kết bạn để bắt đầu trò chuyện");
-  return s.conversations.map(c => {
-    const name = c.display_name || "Ẩn danh";
-    const preview = c.last_message
-      ? `${c.last_message_is_mine ? "Bạn: " : ""}${esc(c.last_message)}`
-      : `<i>Chưa có tin nhắn</i>`;
-    const active = s.view === "messages" && s.activeChatPublicId === c.public_id;
-    return `<button type="button" class="dock-row dock-convo${active ? " active" : ""}" onclick="goToChat('${esc(c.public_id)}')">
-      <div class="dock-ava">${avatarHtml(c.avatar, name.slice(0, 2).toUpperCase())}</div>
-      <div class="dock-info">
-        <div class="dock-name">${esc(name)}</div>
-        <div class="dock-sub">${preview}</div>
-      </div>
-      ${c.unread_count ? `<span class="dock-badge">${c.unread_count}</span>` : ""}
-    </button>`;
-  }).join("");
-}
-
+// ================== MENU BÊN TRÁI: Chibi · Bạn bè · Tin nhắn ==================
+// Chỉ là 3 nút điều hướng xếp dọc ở mép trái (gọn hơn thanh trên). Bấm vào vẫn mở đúng
+// các trang Chibi / Bạn bè / Tin nhắn như cũ; số đỏ = lời mời kết bạn / tin chưa đọc.
 function sideDockHtml(){
+  const item = (view, icon, label, count) => `<button type="button" class="dock-item${s.view === view ? " active" : ""}" onclick="go('${view}')" title="${label}">
+      <span class="dock-item-icon">${icon}${count ? `<span class="dock-badge">${count}</span>` : ""}</span>
+      <span class="dock-item-label">${label}</span>
+    </button>`;
   return `<aside class="side-dock" id="sideDock"><div class="dock-inner">
-    ${dockSection("chibi", "🐾", "Chibi", 0, dockChibiHtml(), "chibi")}
-    ${dockSection("friends", "👥", "Bạn bè", s.friendsIncoming.length, dockFriendsHtml(), "friends")}
-    ${dockSection("messages", "💬", "Tin nhắn", totalUnreadMessages(), dockMessagesHtml(), "messages")}
+    ${item("chibi", "🐾", "Chibi", 0)}
+    ${item("friends", "👥", "Bạn bè", s.friendsIncoming.length)}
+    ${item("messages", "💬", "Tin nhắn", totalUnreadMessages())}
   </div></aside>`;
 }
 
-// Thu/mở 1 mục: chỉ đổi class tại chỗ, KHÔNG render() lại cả trang (tránh làm gián đoạn ván đang chơi).
-function toggleDock(key){
-  s.dockOpen[key] = !s.dockOpen[key];
-  const sec = document.querySelector(`#sideDock .dock-sec[data-key="${key}"]`);
-  if (sec) sec.classList.toggle("open", s.dockOpen[key]);
-}
-
-// Vẽ lại riêng cột trái (giữ nguyên vị trí cuộn), không đụng tới phần còn lại của trang.
+// Vẽ lại riêng menu trái (để cập nhật số đỏ) mà không render() cả trang.
 function refreshDock(){
   const old = document.getElementById("sideDock");
-  if (!old) return;
-  const inner = old.querySelector(".dock-inner");
-  const top = inner ? inner.scrollTop : 0;
-  old.outerHTML = sideDockHtml();
-  const fresh = document.querySelector("#sideDock .dock-inner");
-  if (fresh) fresh.scrollTop = top;
+  if (old) old.outerHTML = sideDockHtml();
 }
 
 function searchBox(){
