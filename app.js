@@ -1198,7 +1198,7 @@ function homeView(){
 const GAMES = [
   { id:"tetris",      name:"Tetris",        desc:"Xếp hình kinh điển — leo rank, phá kỷ lục điểm cao.", icon:"🟦", tag:"ARCADE",     color:"#00d4ff", playable:true  },
   { id:"chess",       name:"Cờ Vua",        desc:"Cờ vua online 1vs1 qua mạng — tạo phòng và mời bạn bè vào đấu.", icon:"♟️", tag:"CHIẾN THUẬT", color:"#e8c97a", playable:true  },
-  { id:"snake",       name:"Rắn săn mồi",   desc:"Điều khiển con rắn, ăn mồi và tránh va chạm.",         icon:"🐍", tag:"ARCADE",     color:"#22c55e", playable:false },
+  { id:"snake",       name:"Rắn săn mồi",   desc:"Điều khiển con rắn, ăn mồi và tránh va chạm.",         icon:"🐍", tag:"ARCADE",     color:"#22c55e", playable:true  },
   { id:"2048",        name:"2048",          desc:"Trượt các ô số, kết hợp để đạt ô 2048.",               icon:"🔢", tag:"PUZZLE",     color:"#f97316", playable:false },
   { id:"flappy",      name:"Flappy Bird",   desc:"Vượt qua ống nước — kiểm tra phản xạ của bạn.",        icon:"🐦", tag:"PHẢN XẠ",    color:"#eab308", playable:false },
   { id:"minesweeper", name:"Dò mìn",        desc:"Lật ô, đánh dấu mìn và sống sót đến cuối.",            icon:"💣", tag:"CHIẾN THUẬT",color:"#ef4444", playable:false },
@@ -1603,6 +1603,9 @@ function render(){
   if (typeof ChessGame !== "undefined") {
     ChessGame.unmount();
   }
+  if (typeof SnakeGame !== "undefined") {
+    SnakeGame.unmount();
+  }
 
   // Chỉ phát animation "fade" khi THỰC SỰ chuyển sang view khác.
   // Nếu vẫn đang ở cùng 1 view (ví dụ chỉ bấm checkbox, đổi filter...),
@@ -1635,6 +1638,11 @@ function render(){
         playerAvatar: s.avatar || "",
         playerScore: s.userHighScore || 0,
         authToken: s.token || ""
+      }));
+    } else if (mountPoint && s.selectedGame === "snake" && typeof SnakeGame !== "undefined") {
+      SnakeGame.mount(mountPoint, Object.assign({}, gameOpts, {
+        onStart: startGameSession,      // chơi lại -> xin phiên chơi mới (token chỉ dùng được 1 lần)
+        highScore: s.userHighScore || 0
       }));
     } else if (mountPoint && typeof TetrisGame !== "undefined") {
       TetrisGame.mount(mountPoint, gameOpts);
