@@ -835,20 +835,44 @@ function checkPasswordMatch(val) {
   refreshRegisterButton();
 }
 
+// Các thẻ game nghiêng, nổi nhẹ ở nửa trái trang đăng nhập/đăng ký (phần intro).
+// Muốn đổi thẻ: sửa mảng INTRO_CARDS (vị trí x/y tính theo %, rot = độ nghiêng).
+const INTRO_ICONS = {
+  tetris: `<div class="ic-tetris"><i style="background:linear-gradient(135deg,#22d3ee,#06b6d4)"></i><i style="background:linear-gradient(135deg,#a78bfa,#8b5cf6)"></i><i style="background:linear-gradient(135deg,#fdba74,#fb923c)"></i><i style="background:linear-gradient(135deg,#22d3ee,#0ea5e9)"></i></div>`,
+  chess: `<div class="ic-chess">♞</div>`,
+  snake: `<svg class="ic-snake" viewBox="0 0 120 60" fill="none"><path d="M10 40 C 22 18, 42 18, 50 34 C 56 46, 70 40, 66 28 C 62 16, 82 14, 90 28" stroke="#34d399" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/><circle cx="104" cy="32" r="9" fill="#34d399"/></svg>`,
+  g2048: `<div class="ic-2048"><b style="background:#c2693a">2</b><b style="background:#d9803f">4</b><b style="background:#8b5cf6">8</b><b style="background:#6d5ae0">16</b></div>`,
+};
+const INTRO_CARDS = [
+  { icon:"tetris", tag:"ARCADE",     name:"Tetris",        desc:"Xếp khối · phá kỷ lục",        color:"#22d3ee", x:4,  y:2,  rot:-8, delay:0   },
+  { icon:"chess",  tag:"CHIẾN THUẬT", name:"Cờ vua",        desc:"Tính toán từng nước đi",       color:"#f6c453", x:50, y:12, rot:7,  delay:1.2 },
+  { icon:"snake",  tag:"ARCADE",     name:"Rắn săn mồi",   desc:"Thu thập · lớn lên · sống sót", color:"#34d399", x:16, y:46, rot:-5, delay:2.1 },
+  { icon:"g2048",  tag:"PUZZLE",     name:"2048",          desc:"Ghép số để chiến thắng",       color:"#fb923c", x:58, y:62, rot:6,  delay:.6  },
+];
+
+function introCardHtml(c){
+  return `<div class="intro-card" style="left:${c.x}%;top:${c.y}%;--rot:${c.rot}deg;--tint:${c.color};animation-delay:${c.delay}s">
+    <span class="intro-card-tag">${c.tag}</span>
+    <div class="intro-card-icon">${INTRO_ICONS[c.icon]}</div>
+    <div class="intro-card-name">${c.name}</div>
+    <div class="intro-card-desc">${c.desc}</div>
+  </div>`;
+}
+
 function leftPanel(){
   return `<aside class="left">
     <div class="gridbg gridbg-abs"></div>
     <div class="glow-gold glow-abs"></div>
     ${logo()}
-    <div class="left-main">
-      <div class="eyebrow">🎮 Game Online — Chơi ngay, thắng ngay</div>
-      <h1>Sẵn sàng<br><span>chiến chưa?</span></h1>
-      <p>Không có game nào khó, chỉ có người chơi ngu.</p>
-      <div class="stats">
-        <div class="stat"><b>84K+</b><small>Game thủ online</small></div>
-        <div class="stat"><b>Top 2</b><small>Server Việt Nam</small></div>
-        <div class="stat"><b>24/7</b><small>Máy chủ ổn định</small></div>
-      </div>
+    <div class="intro-stage" aria-hidden="true">
+      <div class="intro-ring intro-ring-1"></div>
+      <div class="intro-ring intro-ring-2"></div>
+      <div class="intro-glow"></div>
+      ${INTRO_CARDS.map(introCardHtml).join("")}
+    </div>
+    <div class="left-main intro-text">
+      <div class="intro-eyebrow">Bộ sưu tập game của bạn</div>
+      <h1>Mỗi lần đăng nhập,<br><span>một ván mới</span></h1>
     </div>
     <div class="user-mini">
       <div class="avatar-sm">KG</div>
