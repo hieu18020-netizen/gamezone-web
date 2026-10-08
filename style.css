@@ -730,59 +730,26 @@ label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.12
   .chibi-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
 }
 
-/* ===== Cột bên trái: Chibi · Bạn bè · Tin nhắn ===== */
-.side-dock{position:absolute;left:0;top:68px;bottom:0;width:250px;z-index:5;background:rgba(10,10,22,.55);backdrop-filter:blur(10px);border-right:1px solid rgba(139,92,246,.15)}
-.dock-inner{position:sticky;top:68px;max-height:calc(100vh - 68px);overflow-y:auto;padding:.9rem .7rem 1.2rem;display:flex;flex-direction:column;gap:.7rem}
-.dock-inner::-webkit-scrollbar{width:5px}
-.dock-inner::-webkit-scrollbar-thumb{background:rgba(139,92,246,.3);border-radius:4px}
-/* chừa chỗ cho cột trái ở nội dung chính */
-.side-dock ~ main.content{max-width:1350px;padding-left:calc(250px + 2rem)}
-.side-dock ~ .games-body{padding-left:250px}
+/* ===== Menu bên trái (Chibi · Bạn bè · Tin nhắn) ===== */
+.side-dock{position:absolute;left:0;top:68px;bottom:0;width:84px;z-index:5;background:rgba(10,10,22,.55);backdrop-filter:blur(10px);border-right:1px solid rgba(139,92,246,.15)}
+.dock-inner{position:sticky;top:68px;padding:1rem .5rem;display:flex;flex-direction:column;gap:.5rem}
+.dock-item{display:flex;flex-direction:column;align-items:center;gap:.3rem;padding:.7rem .25rem;border-radius:14px;background:transparent;border:1px solid transparent;color:rgba(248,247,244,.55);font:inherit;cursor:pointer;transition:.15s}
+.dock-item:hover{background:rgba(139,92,246,.1);color:rgba(248,247,244,.9)}
+.dock-item.active{background:rgba(139,92,246,.16);border-color:rgba(139,92,246,.35);color:#c4b5fd}
+.dock-item-icon{position:relative;font-size:20px;line-height:1}
+.dock-item-label{font-size:11.5px;font-weight:600}
+.dock-badge{position:absolute;top:-7px;right:-13px;min-width:16px;height:16px;padding:0 4px;border-radius:9px;background:#e53e3e;color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center;box-shadow:0 0 0 2px #0a0a16}
+/* chừa chỗ cho menu trái ở nội dung chính */
+.side-dock ~ main.content{max-width:1230px;padding-left:calc(84px + 2rem)}
+.side-dock ~ .games-body{padding-left:84px}
 .nav-mobile-only{display:none}
-
-.dock-sec{background:rgba(255,255,255,.03);border:1px solid rgba(139,92,246,.16);border-radius:14px;overflow:hidden}
-.dock-head{display:flex;align-items:center;gap:.25rem;padding:.15rem .35rem .15rem 0}
-.dock-toggle{flex:1;min-width:0;display:flex;align-items:center;gap:.5rem;padding:.65rem .75rem;background:none;border:0;color:rgba(248,247,244,.85);font:inherit;font-size:13.5px;font-weight:600;cursor:pointer;text-align:left}
-.dock-toggle:hover{color:#fff}
-.dock-caret{font-size:10px;color:rgba(248,247,244,.4);transition:transform .2s}
-.dock-sec.open .dock-caret{transform:rotate(90deg)}
-.dock-icon{font-size:15px}
-.dock-title{flex:1}
-.dock-badge{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#e53e3e;color:#fff;font-size:10.5px;font-weight:700;display:inline-grid;place-items:center;flex-shrink:0}
-.dock-open{background:none;border:0;color:rgba(248,247,244,.35);font-size:14px;cursor:pointer;padding:.3rem .45rem;border-radius:8px;transition:.15s}
-.dock-open:hover,.dock-open.current{color:#8b5cf6;background:rgba(139,92,246,.12)}
-.dock-body{display:none;padding:.1rem .45rem .55rem;max-height:240px;overflow-y:auto}
-.dock-sec.open .dock-body{display:block}
-.dock-body::-webkit-scrollbar{width:4px}
-.dock-body::-webkit-scrollbar-thumb{background:rgba(139,92,246,.25);border-radius:4px}
-
-.dock-row{display:flex;align-items:center;gap:.5rem;width:100%;padding:.4rem .35rem;border-radius:10px;background:transparent;border:0;color:inherit;font:inherit;text-align:left;transition:background .15s}
-.dock-row:hover{background:rgba(139,92,246,.09)}
-button.dock-row{cursor:pointer}
-.dock-row-main{flex:1;min-width:0;display:flex;align-items:center;gap:.5rem;background:none;border:0;color:inherit;font:inherit;text-align:left;cursor:pointer;padding:0}
-.dock-convo.active{background:rgba(139,92,246,.16)}
-.dock-ava{width:32px;height:32px;border-radius:10px;border:1px solid rgba(139,92,246,.25);background:rgba(139,92,246,.1);color:#8b5cf6;display:grid;place-items:center;font-size:10.5px;font-weight:700;flex-shrink:0;overflow:hidden}
-.dock-ava img{width:100%;height:100%;object-fit:cover;display:block}
-.dock-info{flex:1;min-width:0}
-.dock-name{font-size:13px;font-weight:600;color:rgba(248,247,244,.92);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dock-sub{font-size:10.5px;color:rgba(248,247,244,.4);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dock-label{padding:.45rem .35rem .15rem;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:rgba(248,247,244,.35);font-weight:600}
-.dock-empty{padding:1rem .5rem;text-align:center;font-size:12px;color:rgba(248,247,244,.38);display:flex;flex-direction:column;align-items:center;gap:.35rem}
-.dock-empty span{font-size:20px;opacity:.7}
-.dock-mini-btn{width:28px;height:28px;flex-shrink:0;border-radius:8px;border:1px solid rgba(139,92,246,.3);background:rgba(139,92,246,.1);color:#c4b5fd;font-size:12px;cursor:pointer;display:grid;place-items:center;transition:.15s}
-.dock-mini-btn:hover{background:rgba(139,92,246,.25);color:#fff}
-.dock-mini-btn.active{background:var(--accent-grad);border-color:transparent;color:#fff}
-.dock-mini-btn.ok{border-color:rgba(56,161,105,.5);background:rgba(56,161,105,.15);color:#68d391}
-.dock-mini-btn.no{border-color:rgba(229,62,62,.45);background:rgba(229,62,62,.12);color:#fc8181}
-
-/* màn hình hẹp: ẩn cột trái, trả 3 mục về thanh trên */
+/* màn hình hẹp: ẩn menu trái, trả 3 mục về thanh trên */
 @media(max-width:1000px){
   .side-dock{display:none}
   .side-dock ~ main.content{max-width:1100px;padding-left:2rem}
   .side-dock ~ .games-body{padding-left:0}
   .nav-mobile-only{display:inline}
 }
-
 
 /* ===== Intro bên trái trang đăng nhập: thẻ game nghiêng, nổi nhẹ ===== */
 .intro-stage{position:relative;z-index:1;flex:1;min-height:360px;margin:.5rem 0}
