@@ -107,6 +107,8 @@ let s = {
   activeChatOldestId  : null,
   activeChatHasMore   : false,
   chatSending         : false,
+  quests              : null,   // {completed_count,total,quests:[...]} lấy từ /api/quests
+  questsLoading       : false,
   chibiFilter         : "all",
   chibiFavorites      : new Set(),
   activeChibiCodes    : new Set(), // các mã chibi đang được chọn để chạy CÙNG LÚC trên màn hình; rỗng = chưa chọn cái nào
@@ -130,7 +132,7 @@ function applyChibiRunnerState(){
 // Backend hiện không có token phiên, nên ta chỉ lưu username + dữ liệu hiển thị (không lưu mật khẩu),
 // rồi khi tải lại trang sẽ gọi API để xác thực & làm mới dữ liệu.
 const SESSION_KEY = "gz_session";
-const RESTORABLE_VIEWS = ["home", "games", "game", "friends", "messages", "chibi"]; // các view hợp lệ để khôi phục sau F5
+const RESTORABLE_VIEWS = ["home", "games", "game", "friends", "messages", "chibi", "quests"]; // các view hợp lệ để khôi phục sau F5
 
 function saveSession(){
   if (!s.username) return;
@@ -182,6 +184,7 @@ function logout(){
   s.friendsLoaded = false;
   s.conversations = [];
   s.conversationsLoaded = false;
+  s.quests = null;
   s.activeChatPublicId = null;
   s.activeChatMessages = [];
   s.activeChibiCodes = new Set();
@@ -1436,6 +1439,69 @@ function chibiView(){
   </div>`;
 }
 
+// ================== NHIỆM VỤ ==================
+// Danh sách + tiến độ lấy từ server (/api/quests). Server đối chiếu chỉ số thật trong CSDL
+// và lưu lại nhiệm vụ đã hoàn thành, nên không thể tự báo "xong" từ trình duyệt.
+async function fetchQuests(){
+  if (!s.token) return;
+  s.questsLoading = true;
+  if (s.view === "quests") render();
+  try {
+    const res = await authFetch(`${API_URL}/quests`);
+    if (res.ok) s.quests = await res.json();
+  } catch (err) {
+    console.error("Lỗi lấy danh sách nhiệm vụ:", err);
+  } finally {
+    s.questsLoading = false;
+    if (s.view === "quests") render();
+  }
+}
+
+function formatQuestDate(iso){
+  try { return new Date(iso).toLocaleDateString("vi-VN"); } catch (e) { return ""; }
+}
+
+function questCard(q){
+  const pct = q.target ? Math.round(q.progress / q.target * 100) : 0;
+  return `<div class="quest-card${q.completed ? " done" : ""}">
+    <div class="quest-icon">${esc(q.icon)}</div>
+    <div class="quest-body">
+      <div class="quest-title">${esc(q.title)}</div>
+      <div class="quest-desc">${esc(q.description)}</div>
+      <div class="quest-bar"><span style="width:${pct}%"></span></div>
+      <div class="quest-meta">
+        <span>${q.progress.toLocaleString("vi-VN")} / ${q.target.toLocaleString("vi-VN")}</span>
+        ${q.completed ? `<span class="quest-done-tag">✓ Hoàn thành${q.completed_at ? " · " + formatQuestDate(q.completed_at) : ""}</span>` : `<span>${pct}%</span>`}
+      </div>
+    </div>
+  </div>`;
+}
+
+function questsView(){
+  let body;
+  if (!s.quests) {
+    body = `<div class="nav-search-empty" style="padding:3rem 1rem"><span class="nav-search-spin">◌</span> Đang tải nhiệm vụ...</div>`;
+  } else if (!s.quests.quests.length) {
+    body = `<div class="nav-search-empty" style="padding:3rem 1rem"><span class="nav-search-empty-icon">🎯</span>Chưa có nhiệm vụ nào. Hãy chạy file quests.sql trong SSMS nhé!</div>`;
+  } else {
+    const { completed_count, total } = s.quests;
+    const pct = total ? Math.round(completed_count / total * 100) : 0;
+    body = `<div class="quest-summary">
+        <div><b>${completed_count}</b> / ${total} nhiệm vụ đã hoàn thành</div>
+        <div class="quest-bar big"><span style="width:${pct}%"></span></div>
+      </div>
+      <div class="quest-grid">${s.quests.quests.map(questCard).join("")}</div>`;
+  }
+  return `<div class="home fade">
+    <div class="gridbg fixed-grid"></div>
+    ${navBar()}
+    <main class="content">
+      <div class="section-title">Nhiệm vụ</div>
+      ${body}
+    </main>
+  </div>`;
+}
+
 function gamesView(){
   const displayName = s.nick || s.username || "GameThủ";
   const ini = displayName.slice(0, 2).toUpperCase();
@@ -1552,6 +1618,7 @@ function render(){
   else if(s.view==="chibi")    app.innerHTML = chibiView();
   else if(s.view==="friends")  app.innerHTML = friendsView();
   else if(s.view==="messages") app.innerHTML = messagesView();
+  else if(s.view==="quests")   app.innerHTML = questsView();
   else if(s.view==="game"){
     app.innerHTML = gameView();
     s.gameSessionToken = ""; // reset, token cũ (nếu có) đã dùng xong hoặc không còn hợp lệ
@@ -1586,6 +1653,9 @@ function go(view, gameId){
   }
   if(view === "friends") {
     fetchFriends();
+  }
+  if(view === "quests") {
+    fetchQuests();
   }
   if(view === "messages") {
     fetchConversations();
@@ -1810,6 +1880,7 @@ function navBar(){
       <div class="navlinks">
         <span class="${s.view==='home'?'active':''}" onclick="go('home')" style="cursor:pointer">Hồ sơ</span>
         <span class="${gamesActive?'active':''}" onclick="go('games')" style="cursor:pointer">Chơi ngay</span>
+        <span class="nav-mobile-only ${s.view==='quests'?'active':''}" onclick="go('quests')" style="cursor:pointer">Nhiệm vụ</span>
         <span class="nav-mobile-only ${s.view==='chibi'?'active':''}" onclick="go('chibi')" style="cursor:pointer">Chibi</span>
         <span class="nav-mobile-only ${s.view==='friends'?'active':''}" onclick="go('friends')" style="cursor:pointer;position:relative">
           Bạn bè${s.friendsIncoming.length ? `<span class="nav-badge">${s.friendsIncoming.length}</span>` : ""}
@@ -1839,6 +1910,7 @@ function sideDockHtml(){
       <span class="dock-item-label">${label}</span>
     </button>`;
   return `<aside class="side-dock" id="sideDock"><div class="dock-inner">
+    ${item("quests", "🎯", "Nhiệm vụ", 0)}
     ${item("chibi", "🐾", "Chibi", 0)}
     ${item("friends", "👥", "Bạn bè", s.friendsIncoming.length)}
     ${item("messages", "💬", "Tin nhắn", totalUnreadMessages())}
