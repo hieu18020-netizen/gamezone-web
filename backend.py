@@ -7,7 +7,7 @@ Cách đọc file này (từ trên xuống, mỗi phần là 1 nhóm class):
   3. Database                      : mở/đóng kết nối, commit/rollback
   4. PasswordHasher, TokenService, Authenticator : mật khẩu & đăng nhập
   5. Schemas                       : dữ liệu client gửi lên
-  6. Services (Auth/User/Friend/Message) : nghiệp vụ
+  6. Services (Auth/User/Friend/Message/Quest) : nghiệp vụ
   7. ConnectionManager, DuelHub    : WebSocket realtime
   8. GameService, ChessService     : điểm Tetris & cờ vua
   9. GameZoneAPI                   : gắn mọi thứ thành các đường dẫn /api/...
@@ -404,13 +404,51 @@ class MessageRepository(BaseRepository):
         return row[0], row[1]
 
 
+class QuestRepository(BaseRepository):
+    """Bảng quests (định nghĩa nhiệm vụ) và user_quests (ai đã hoàn thành)."""
+
+    def list_quests(self):
+        return self._all(
+            "SELECT id, code, title, description, icon, metric, target FROM quests ORDER BY sort_order, id"
+        )
+
+    def metrics(self, username):
+        """Các chỉ số của người chơi, đọc thẳng từ CSDL để đối chiếu với mốc nhiệm vụ."""
+        return self._one(
+            """
+            SELECT
+                ISNULL(u.total_matches, 0) AS matches,
+                ISNULL(u.high_score, 0)    AS high_score,
+                ISNULL(u.chess_score, 0)   AS chess_score,
+                (SELECT COUNT(*) FROM friends f
+                  WHERE (f.requester_id = u.id OR f.addressee_id = u.id) AND f.status = 'accepted') AS friends,
+                (SELECT COUNT(*) FROM messages m WHERE m.sender_id = u.id) AS messages_sent,
+                CASE WHEN ISNULL(u.nickname, '') <> '' AND ISNULL(u.avatar, '') <> '' THEN 1 ELSE 0 END AS profile_complete,
+                CASE WHEN ISNULL(u.active_chibi_code, '') <> '' THEN 1 ELSE 0 END AS chibi_active
+            FROM users u WHERE u.username = ?
+            """,
+            username,
+        )
+
+    def completed(self, user_id):
+        return self._all("SELECT quest_id, completed_at FROM user_quests WHERE user_id = ?", user_id)
+
+    def mark_completed(self, user_id, quest_id):
+        self._run(
+            "IF NOT EXISTS (SELECT 1 FROM user_quests WHERE user_id = ? AND quest_id = ?) "
+            "INSERT INTO user_quests (user_id, quest_id) VALUES (?, ?)",
+            user_id, quest_id, user_id, quest_id,
+        )
+
+
 class Repositories:
-    """Gom 3 repository dùng chung 1 cursor (= cùng 1 giao dịch)."""
+    """Gom các repository dùng chung 1 cursor (= cùng 1 giao dịch)."""
 
     def __init__(self, cursor):
         self.users = UserRepository(cursor)
         self.friends = FriendRepository(cursor)
         self.messages = MessageRepository(cursor)
+        self.quests = QuestRepository(cursor)
 
 
 # ======================================================================
@@ -822,6 +860,43 @@ class FriendService:
             }
 
 
+class QuestService:
+    """Nhiệm vụ: mỗi lần mở danh sách, server đối chiếu chỉ số THẬT trong CSDL với mốc của từng
+    nhiệm vụ. Nhiệm vụ nào vừa đạt thì ghi vào user_quests và giữ mãi (kể cả sau này chỉ số tụt)."""
+
+    METRICS = {"matches", "high_score", "chess_score", "friends",
+               "messages_sent", "profile_complete", "chibi_active"}
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def list_for(self, username: str) -> dict:
+        with self.db.session() as repo:
+            user_id = repo.users.require_id(username)
+            quests = repo.quests.list_quests()
+            metrics = repo.quests.metrics(username)
+            done = {r.quest_id: r.completed_at for r in repo.quests.completed(user_id)}
+
+            items = []
+            for q in quests:
+                value = int(getattr(metrics, q.metric, 0) or 0) if q.metric in self.METRICS else 0
+                if q.id not in done and value >= q.target:
+                    repo.quests.mark_completed(user_id, q.id)  # vừa hoàn thành -> lưu lại
+                    done[q.id] = datetime.now(timezone.utc)
+                items.append({
+                    "code": q.code,
+                    "title": q.title,
+                    "description": q.description,
+                    "icon": q.icon,
+                    "progress": q.target if q.id in done else max(0, min(value, q.target)),
+                    "target": q.target,
+                    "completed": q.id in done,
+                    "completed_at": to_iso(done[q.id]) if q.id in done else None,
+                })
+        return {"completed_count": sum(1 for i in items if i["completed"]),
+                "total": len(items), "quests": items}
+
+
 # ======================================================================
 # 7. REALTIME (WebSocket)
 # ======================================================================
@@ -1124,6 +1199,7 @@ class GameZoneAPI:
         self.messages = MessageService(self.db, self.connections)
         self.game = GameService(self.db, config)
         self.chess = ChessService(self.db, config)
+        self.quests = QuestService(self.db)
 
         # FastAPI
         self.app = FastAPI()
@@ -1150,6 +1226,7 @@ class GameZoneAPI:
         r.add_api_route("/leaderboard", self.leaderboard, methods=["GET"])
         r.add_api_route("/search-users", self.search_users, methods=["GET"])
         r.add_api_route("/profile/{public_id}", self.profile, methods=["GET"])
+        r.add_api_route("/quests", self.list_quests, methods=["GET"])
         # Điểm số
         r.add_api_route("/start-game", self.start_game, methods=["POST"])
         r.add_api_route("/update-score", self.update_score, methods=["POST"])
@@ -1196,6 +1273,9 @@ class GameZoneAPI:
 
     def profile(self, public_id: str, viewer: Optional[str] = OptionalUser):
         return self.users.public_profile(public_id, viewer)
+
+    def list_quests(self, username: str = CurrentUser):
+        return self.quests.list_for(username)
 
     # ---------- Điểm số ----------
     def start_game(self, username: str = CurrentUser):
