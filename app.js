@@ -743,7 +743,7 @@ function pwField(id, placeholder, val, showKey, onInput){
   const type = s[showKey] ? "text" : "password";
   return `<div style="position:relative">
     <input class="input input-pw" id="${id}" type="${type}" placeholder="${placeholder}" value="${esc(val)}"
-      oninput="${onInput}">
+      autocomplete="new-password" autocapitalize="off" spellcheck="false" oninput="${onInput}">
     <button class="eye" type="button" onclick="toggle('${showKey}')">
       ${s[showKey]?"🙈":"👁"}
     </button>
@@ -970,7 +970,7 @@ function loginView(){
           <div class="field">
             <label>Tên đăng nhập</label>
             <input class="input" required placeholder="Nhập tên đăng nhập..."
-              id="loginUser" value="${esc(s.username)}" oninput="s.username=this.value">
+              id="loginUser" value="${esc(s.username)}" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="s.username=this.value">
           </div>
           <div class="field">
             <div class="field-row">
