@@ -57,6 +57,10 @@ label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.12
 .field-row{display:flex;justify-content:space-between;align-items:center}
 .input{width:100%;padding:.875rem 1rem;background:#0c0f1a;color:#f8f7f4;border:1.5px solid rgba(255,255,255,.08);border-radius:8px;outline:none;transition:border-color .15s}
 .input:focus{border-color:#8b5cf6}
+/* Chặn trình duyệt tự đổi nền/màu chữ ô nhập khi autofill */
+.input:-webkit-autofill,.input:-webkit-autofill:hover,.input:-webkit-autofill:focus,.input:-webkit-autofill:active{-webkit-text-fill-color:#f8f7f4;caret-color:#f8f7f4;-webkit-box-shadow:0 0 0 1000px #0c0f1a inset;box-shadow:0 0 0 1000px #0c0f1a inset;transition:background-color 9999s ease-in-out 0s}
+.input-pw::-ms-reveal,.input-pw::-ms-clear{display:none}
+.input::placeholder{color:rgba(248,247,244,.35)}
 .input-pw{padding-right:3rem}
 .eye{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:0;color:rgba(248,247,244,.4);padding:8px;font-size:16px;line-height:1}
 
