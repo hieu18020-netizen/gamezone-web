@@ -289,8 +289,10 @@ label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.12
 .achievement{background:rgba(255,255,255,.04);border:1px solid rgba(139,92,246,.28);border-radius:14px;padding:1.25rem;transition:.25s;cursor:default;position:relative;overflow:hidden;animation:cardPop .45s ease backwards}
 .achievement:nth-child(1){animation-delay:.02s}.achievement:nth-child(2){animation-delay:.07s}.achievement:nth-child(3){animation-delay:.12s}
 .achievement:nth-child(4){animation-delay:.17s}.achievement:nth-child(5){animation-delay:.22s}.achievement:nth-child(6){animation-delay:.27s}
+.achievement:nth-child(7){animation-delay:.32s}.achievement:nth-child(8){animation-delay:.37s}.achievement:nth-child(9){animation-delay:.42s}
 .achievement::before{content:"";position:absolute;inset:0;background:linear-gradient(120deg,transparent 30%,rgba(255,255,255,.06) 50%,transparent 70%);transform:translateX(-100%);transition:transform .6s}
 .achievement:hover:not(.locked)::before{transform:translateX(100%)}
+.achv-lock{position:absolute;top:.7rem;right:.8rem;font-size:12px;opacity:.7}
 .achievement.locked{opacity:.5;border-color:rgba(255,255,255,.1);background:rgba(255,255,255,.02)}
 .achievement:hover:not(.locked){transform:translateY(-4px) scale(1.015);border-color:rgba(139,92,246,.55);box-shadow:0 14px 32px rgba(0,0,0,.35),0 0 24px rgba(139,92,246,.15)}
 .achievement .icon{font-size:26px;margin-bottom:.75rem;width:50px;height:50px;border-radius:14px;display:grid;place-items:center;background:rgba(139,92,246,.14);transition:transform .25s}
