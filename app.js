@@ -1496,7 +1496,14 @@ async function fetchChibis(){
   if (!s.token) return;
   try {
     const res = await authFetch(`${API_URL}/chibis`);
-    if (!res.ok) return;
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      s.chibisError = `Lỗi ${res.status}: ${err.detail || "máy chủ không phản hồi đúng"}`;
+      console.error("Lỗi /chibis:", s.chibisError);
+      if (s.view === "shop") render();
+      return;
+    }
+    s.chibisError = null;
     const data = await res.json();
     s.unlockedChibiCodes = new Set((data.chibis || []).filter(c => c.unlocked).map(c => c.code));
     s.chibisLoaded = true;
@@ -1512,6 +1519,8 @@ async function fetchChibis(){
     if (s.view === "chibi" || s.view === "shop") render();
   } catch (err) {
     console.error("Lỗi lấy danh sách chibi:", err);
+    s.chibisError = "Không kết nối được máy chủ (kiểm tra API_URL trong config.js)";
+    if (s.view === "shop") render();
   }
 }
 
@@ -1690,6 +1699,7 @@ function shopView(){
   const items = shopItems();
   let body;
   if (!s.token) body = `<div class="quest-hint">Vui lòng đăng nhập để mua chibi.</div>`;
+  else if (s.chibisError) body = `<div class="quest-hint">⚠️ Không tải được cửa hàng. ${esc(s.chibisError)}</div>`;
   else if (!s.chibisLoaded) body = `<div class="quest-hint">Đang tải cửa hàng...</div>`;
   else if (!items.length) body = `<div class="quest-hint">Bạn đã sở hữu tất cả chibi đang bán. Hãy quay lại sau nhé!</div>`;
   else body = `<div class="chibi-grid">${items.map(shopCard).join("")}</div>`;
