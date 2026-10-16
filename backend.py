@@ -7,9 +7,9 @@ Cách đọc file này (từ trên xuống, mỗi phần là 1 nhóm class):
   3. Database                      : mở/đóng kết nối, commit/rollback
   4. PasswordHasher, TokenService, Authenticator : mật khẩu & đăng nhập
   5. Schemas                       : dữ liệu client gửi lên
-  6. Services (Auth/User/Friend/Message/Quest) : nghiệp vụ
+  6. Services (Auth/User/Chibi/History/Notification/Quest/Friend/Message) : nghiệp vụ
   7. ConnectionManager, DuelHub    : WebSocket realtime
-  8. GameService, ChessService     : điểm Tetris & cờ vua
+  8. GameService, ChessService     : điểm Tetris & cờ vua (+ ghi lịch sử chơi)
   9. GameZoneAPI                   : gắn mọi thứ thành các đường dẫn /api/...
 
 Chạy:  python -m uvicorn backend:app --reload --port 5000
@@ -75,6 +75,14 @@ class Settings:
     lobby_room_ttl_seconds: int = 15 * 60
     chess_report_ttl_seconds: int = 30 * 60
     chess_score_delta: int = 100
+
+    # Vàng thưởng nhiệm vụ, thông báo, lịch sử chơi
+    quest_reward_gold: int = 10
+    quest_sync_interval_seconds: int = 15
+    notification_default_limit: int = 30
+    notification_max_limit: int = 100
+    history_default_limit: int = 50
+    history_max_limit: int = 100
 
 
 settings = Settings()
@@ -149,7 +157,7 @@ class UserRepository(BaseRepository):
 
     def find_for_login(self, username):
         return self._one(
-            "SELECT username, password, nickname, avatar, active_chibi_code FROM users WHERE username = ?",
+            "SELECT id, username, password, nickname, avatar, active_chibi_code FROM users WHERE username = ?",
             username,
         )
 
@@ -194,6 +202,24 @@ class UserRepository(BaseRepository):
             delta, username,
         )
 
+    # --- vàng ---
+    def get_gold(self, user_id):
+        row = self._one("SELECT ISNULL(gold, 0) AS gold FROM users WHERE id = ?", user_id)
+        return int(row.gold) if row else 0
+
+    def spend_gold(self, user_id, price):
+        """Trừ vàng NGUYÊN TỬ: chỉ trừ khi còn đủ (gold >= price). Trả về True nếu trừ được.
+        Dùng OUTPUT INTO thay vì đếm số dòng vì bảng users có thể có trigger làm sai lệch rowcount."""
+        row = self._one(
+            "SET NOCOUNT ON; "
+            "DECLARE @r TABLE (id INT); "
+            "UPDATE users SET gold = ISNULL(gold, 0) - ? OUTPUT inserted.id INTO @r "
+            "WHERE id = ? AND ISNULL(gold, 0) >= ?; "
+            "SELECT COUNT(*) FROM @r;",
+            price, user_id, price,
+        )
+        return bool(row and row[0] > 0)
+
     # --- thống kê / xếp hạng ---
     def rank_of(self, username):
         row = self._one(
@@ -210,7 +236,7 @@ class UserRepository(BaseRepository):
 
     def get_stats(self, username):
         return self._one(
-            f"SELECT ISNULL(total_matches, 0) AS total_matches, {TOTAL_SCORE} AS score, "
+            f"SELECT id, ISNULL(total_matches, 0) AS total_matches, {TOTAL_SCORE} AS score, "
             "avatar, public_id, active_chibi_code FROM users WHERE username = ?",
             username,
         )
@@ -407,38 +433,170 @@ class MessageRepository(BaseRepository):
 class QuestRepository(BaseRepository):
     """Bảng quests (định nghĩa nhiệm vụ) và user_quests (ai đã hoàn thành)."""
 
-    def list_quests(self):
+    def list_with_status(self, user_id):
         return self._all(
-            "SELECT id, code, title, description, icon, metric, target FROM quests ORDER BY sort_order, id"
+            "SELECT q.id, q.title, q.description, q.quest_type, q.metric, q.target, "
+            "       CASE WHEN uq.quest_id IS NULL THEN 0 ELSE 1 END AS done "
+            "FROM quests q "
+            "LEFT JOIN user_quests uq ON uq.quest_id = q.id AND uq.user_id = ? "
+            "ORDER BY q.sort_order, q.id",
+            user_id,
         )
 
-    def metrics(self, username):
-        """Các chỉ số của người chơi, đọc thẳng từ CSDL để đối chiếu với mốc nhiệm vụ."""
+    def list_pending(self, user_id):
+        return self._all(
+            "SELECT q.id, q.title, q.description, q.quest_type, q.metric, q.target "
+            "FROM quests q "
+            "WHERE NOT EXISTS (SELECT 1 FROM user_quests uq WHERE uq.quest_id = q.id AND uq.user_id = ?) "
+            "ORDER BY q.sort_order, q.id",
+            user_id,
+        )
+
+    def profile(self, username):
+        """Các chỉ số THẬT của người chơi, đọc thẳng từ CSDL để đối chiếu với điều kiện nhiệm vụ."""
         return self._one(
             """
             SELECT
-                ISNULL(u.total_matches, 0) AS matches,
+                ISNULL(u.total_matches, 0) AS total_matches,
                 ISNULL(u.high_score, 0)    AS high_score,
                 ISNULL(u.chess_score, 0)   AS chess_score,
+                CASE WHEN LTRIM(RTRIM(ISNULL(u.nickname, ''))) <> '' THEN 1 ELSE 0 END AS has_nickname,
+                CASE WHEN ISNULL(u.avatar, '') <> '' THEN 1 ELSE 0 END AS has_avatar,
+                CASE WHEN LTRIM(RTRIM(ISNULL(u.active_chibi_code, ''))) <> '' THEN 1 ELSE 0 END AS has_chibi,
                 (SELECT COUNT(*) FROM friends f
-                  WHERE (f.requester_id = u.id OR f.addressee_id = u.id) AND f.status = 'accepted') AS friends,
-                (SELECT COUNT(*) FROM messages m WHERE m.sender_id = u.id) AS messages_sent,
-                CASE WHEN ISNULL(u.nickname, '') <> '' AND ISNULL(u.avatar, '') <> '' THEN 1 ELSE 0 END AS profile_complete,
-                CASE WHEN ISNULL(u.active_chibi_code, '') <> '' THEN 1 ELSE 0 END AS chibi_active
+                  WHERE f.status = 'accepted' AND (f.requester_id = u.id OR f.addressee_id = u.id)) AS friends,
+                (SELECT COUNT(*) FROM messages m WHERE m.sender_id = u.id) AS messages_sent
             FROM users u WHERE u.username = ?
             """,
             username,
         )
 
-    def completed(self, user_id):
-        return self._all("SELECT quest_id, completed_at FROM user_quests WHERE user_id = ?", user_id)
-
-    def mark_completed(self, user_id, quest_id):
-        self._run(
+    def mark_done(self, user_id, quest_id, reward_gold):
+        """Ghi nhận hoàn thành + cộng vàng thưởng trong CÙNG 1 batch SQL. Chỉ cộng vàng khi dòng
+        user_quests thực sự được chèn mới nên gọi lại nhiều lần không bị cộng trùng.
+        Trả về True nếu đây là lần hoàn thành đầu tiên."""
+        row = self._one(
+            "SET NOCOUNT ON; "
+            "DECLARE @ins TABLE (quest_id BIGINT); "
             "IF NOT EXISTS (SELECT 1 FROM user_quests WHERE user_id = ? AND quest_id = ?) "
-            "INSERT INTO user_quests (user_id, quest_id) VALUES (?, ?)",
-            user_id, quest_id, user_id, quest_id,
+            "    INSERT INTO user_quests (user_id, quest_id) OUTPUT inserted.quest_id INTO @ins VALUES (?, ?); "
+            "UPDATE users SET gold = ISNULL(gold, 0) + ? WHERE id = ? AND EXISTS (SELECT 1 FROM @ins); "
+            "SELECT COUNT(*) FROM @ins;",
+            user_id, quest_id, user_id, quest_id, reward_gold, user_id,
         )
+        return bool(row and row[0] > 0)
+
+
+class ChibiRepository(BaseRepository):
+    """Bảng chibi_characters (danh sách chibi + giá) và user_chibis (ai đã mở khoá chibi nào)."""
+
+    def list_all(self):
+        return self._all(
+            "SELECT id, code, name, frame_count, sprite_dir, is_default, ISNULL(price, 0) AS price "
+            "FROM chibi_characters ORDER BY id ASC"
+        )
+
+    def find_by_code(self, code):
+        return self._one(
+            "SELECT id, code, name, ISNULL(price, 0) AS price FROM chibi_characters WHERE code = ?", code
+        )
+
+    def unlocked_codes(self, user_id):
+        rows = self._all(
+            "SELECT c.code FROM chibi_characters c JOIN user_chibis uc ON uc.chibi_id = c.id "
+            "WHERE uc.user_id = ?",
+            user_id,
+        )
+        return [r.code for r in rows]
+
+    def grant_defaults(self, user_id):
+        """Cấp chibi mặc định (is_default = 1) nếu chưa có. Gọi lại nhiều lần vẫn an toàn."""
+        self._run(
+            "INSERT INTO user_chibis (user_id, chibi_id) "
+            "SELECT CAST(? AS INT), c.id FROM chibi_characters c "
+            "WHERE c.is_default = 1 "
+            "AND NOT EXISTS (SELECT 1 FROM user_chibis uc WHERE uc.user_id = CAST(? AS INT) AND uc.chibi_id = c.id)",
+            user_id, user_id,
+        )
+
+    def unlock(self, user_id, chibi_id):
+        self._run("INSERT INTO user_chibis (user_id, chibi_id) VALUES (?, ?)", user_id, chibi_id)
+
+
+class GameHistoryRepository(BaseRepository):
+    """Bảng game_history: mỗi ván kết thúc là 1 dòng của 1 người chơi."""
+
+    def record_tetris(self, user_id, score, duration_seconds):
+        self._run(
+            "INSERT INTO game_history (user_id, game_type, score, score_delta, duration_seconds) "
+            "VALUES (?, 'tetris', ?, 0, ?)",
+            user_id, score, duration_seconds,
+        )
+
+    def record_chess(self, user_id, result, score_delta, opponent_id, room_code):
+        self._run(
+            "INSERT INTO game_history (user_id, game_type, result, score_delta, opponent_id, room_code) "
+            "VALUES (?, 'chess', ?, ?, ?, ?)",
+            user_id, result, score_delta, opponent_id, room_code,
+        )
+
+    def latest(self, user_id, game_type, limit):
+        sql = (
+            "SELECT TOP (?) g.id, g.game_type, g.result, g.score, g.score_delta, g.opponent_id, "
+            "       g.room_code, g.duration_seconds, g.played_at, "
+            "       COALESCE(NULLIF(o.nickname, ''), o.username) AS opponent_name, "
+            "       o.public_id AS opponent_public_id "
+            "FROM game_history g LEFT JOIN users o ON o.id = g.opponent_id "
+            "WHERE g.user_id = ?"
+        )
+        params = [limit, user_id]
+        if game_type:
+            sql += " AND g.game_type = ?"
+            params.append(game_type)
+        sql += " ORDER BY g.played_at DESC, g.id DESC"
+        return self._all(sql, *params)
+
+    def summary(self, user_id):
+        return self._one(
+            """
+            SELECT
+                SUM(CASE WHEN game_type = 'tetris' THEN 1 ELSE 0 END) AS tetris_games,
+                MAX(CASE WHEN game_type = 'tetris' THEN score END)    AS tetris_best,
+                SUM(CASE WHEN game_type = 'chess' THEN 1 ELSE 0 END)  AS chess_games,
+                SUM(CASE WHEN game_type = 'chess' AND result = 'win'  THEN 1 ELSE 0 END) AS chess_wins,
+                SUM(CASE WHEN game_type = 'chess' AND result = 'loss' THEN 1 ELSE 0 END) AS chess_losses,
+                SUM(CASE WHEN game_type = 'chess' AND result = 'draw' THEN 1 ELSE 0 END) AS chess_draws
+            FROM game_history WHERE user_id = ?
+            """,
+            user_id,
+        )
+
+
+class NotificationRepository(BaseRepository):
+    """Bảng notifications. Thông báo do DATABASE tự tạo (trigger); ở đây chỉ đọc / đánh dấu đã đọc."""
+
+    def latest(self, user_id, limit):
+        return self._all(
+            "SELECT TOP (?) id, notif_type, content, is_read, created_at FROM notifications "
+            "WHERE user_id = ? ORDER BY created_at DESC, id DESC",
+            limit, user_id,
+        )
+
+    def count_unread(self, user_id):
+        row = self._one(
+            "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0", user_id
+        )
+        return int(row[0]) if row else 0
+
+    def mark_read(self, notification_id, user_id):
+        # Chỉ đánh dấu thông báo CỦA CHÍNH user này.
+        self._run(
+            "UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ? AND is_read = 0",
+            notification_id, user_id,
+        )
+
+    def mark_all_read(self, user_id):
+        self._run("UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0", user_id)
 
 
 class Repositories:
@@ -449,6 +607,9 @@ class Repositories:
         self.friends = FriendRepository(cursor)
         self.messages = MessageRepository(cursor)
         self.quests = QuestRepository(cursor)
+        self.chibis = ChibiRepository(cursor)
+        self.history = GameHistoryRepository(cursor)
+        self.notifications = NotificationRepository(cursor)
 
 
 # ======================================================================
@@ -616,6 +777,20 @@ def to_iso(dt) -> str:
         return str(dt)
 
 
+def to_utc_iso(dt, trim_seconds=False) -> Optional[str]:
+    """CSDL lưu giờ UTC (SYSUTCDATETIME) -> trả ISO có hậu tố Z để trình duyệt đổi sang giờ địa phương."""
+    if dt is None:
+        return None
+    try:
+        if getattr(dt, "tzinfo", None) is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        if trim_seconds:
+            dt = dt.replace(microsecond=0)
+        return dt.isoformat() + "Z"
+    except Exception:
+        return str(dt)
+
+
 class ChibiList:
     """Cột users.active_chibi_code lưu nhiều mã cách nhau bằng dấu phẩy, vd "1,2"."""
 
@@ -647,6 +822,8 @@ class AuthService:
                 repo.users.new_public_id(),
                 self.config.default_chibi_code,
             )
+            # Tài khoản mới CHỈ được mở khoá chibi mặc định; các chibi khác phải mua.
+            repo.chibis.grant_defaults(repo.users.require_id(username))
         return {"message": "Đăng ký thành công"}
 
     def login(self, username: str, password: str) -> dict:
@@ -668,11 +845,20 @@ class AuthService:
             if not password_ok:
                 raise wrong
 
+            # Tài khoản cũ (tạo trước khi có bảng chibi) được cấp chibi mặc định ngay lúc đăng nhập.
+            repo.chibis.grant_defaults(user.id)
+            # Chỉ trả về các chibi đang bật mà tài khoản THỰC SỰ đã mở khoá.
+            saved_codes = ChibiList.parse(user.active_chibi_code)
+            unlocked = set(repo.chibis.unlocked_codes(user.id))
+            active_codes = [c for c in saved_codes if c in unlocked]
+            if len(active_codes) != len(saved_codes):
+                repo.users.set_active_chibis_raw(user.username, ChibiList.serialize(active_codes))
+
         return {
             "username": user.username,
             "nickname": user.nickname or "",
             "avatar": user.avatar or "",
-            "active_chibi_codes": ChibiList.parse(user.active_chibi_code),
+            "active_chibi_codes": active_codes,
             "token": self.tokens.create(user.username),
         }
 
@@ -705,6 +891,12 @@ class UserService:
             raise HTTPException(status_code=400, detail="Mã chibi không hợp lệ")
 
         with self.db.session() as repo:
+            if active:
+                # Chỉ được BẬT chibi đã mở khoá (tắt thì luôn được).
+                user_id = repo.users.require_id(username)
+                repo.chibis.grant_defaults(user_id)  # phòng khi tài khoản cũ chưa được cấp chibi mặc định
+                if code not in repo.chibis.unlocked_codes(user_id):
+                    raise HTTPException(status_code=403, detail="Chibi này chưa được mở khoá")
             codes = ChibiList.parse(repo.users.get_active_chibis_raw(username))
             if active:
                 if code not in codes:
@@ -727,13 +919,18 @@ class UserService:
                 public_id = repo.users.new_public_id()
                 repo.users.set_public_id(username, public_id)
 
+            active_codes = []
+            if row:
+                unlocked = set(repo.chibis.unlocked_codes(row.id))
+                active_codes = [c for c in ChibiList.parse(row.active_chibi_code) if c in unlocked]
+
         return {
             "rank": f"#{rank if rank is not None else '-'}",
             "total_matches": row.total_matches if row else 0,
             "high_score": row.score if row else 0,
             "avatar": (row.avatar or "") if row else "",
             "public_id": public_id or NO_PUBLIC_ID,
-            "active_chibi_codes": ChibiList.parse(row.active_chibi_code) if row else [],
+            "active_chibi_codes": active_codes,
         }
 
     def leaderboard(self, viewer: Optional[str]) -> list[dict]:
@@ -860,41 +1057,281 @@ class FriendService:
             }
 
 
-class QuestService:
-    """Nhiệm vụ: mỗi lần mở danh sách, server đối chiếu chỉ số THẬT trong CSDL với mốc của từng
-    nhiệm vụ. Nhiệm vụ nào vừa đạt thì ghi vào user_quests và giữ mãi (kể cả sau này chỉ số tụt)."""
+class ChibiService:
+    """Kho chibi: danh sách + mua bằng vàng. Tài khoản mới chỉ có chibi mặc định (is_default = 1)."""
 
-    METRICS = {"matches", "high_score", "chess_score", "friends",
-               "messages_sent", "profile_complete", "chibi_active"}
-
-    def __init__(self, db: Database):
-        self.db = db
+    def __init__(self, db: Database, config: Settings):
+        self.db, self.config = db, config
 
     def list_for(self, username: str) -> dict:
         with self.db.session() as repo:
             user_id = repo.users.require_id(username)
-            quests = repo.quests.list_quests()
-            metrics = repo.quests.metrics(username)
-            done = {r.quest_id: r.completed_at for r in repo.quests.completed(user_id)}
+            repo.chibis.grant_defaults(user_id)  # tài khoản cũ cũng được cấp chibi mặc định
+            unlocked = repo.chibis.unlocked_codes(user_id)
+            unlocked_set = set(unlocked)
+            items = [
+                {
+                    "code": r.code,
+                    "name": r.name,
+                    "frame_count": r.frame_count,
+                    "sprite_dir": r.sprite_dir,
+                    "is_default": bool(r.is_default),
+                    "unlocked": r.code in unlocked_set,
+                    "price": int(r.price or 0),
+                }
+                for r in repo.chibis.list_all()
+            ]
+            gold = repo.users.get_gold(user_id)
+        return {"chibis": items, "unlocked_count": len(unlocked_set), "total": len(items), "gold": gold}
 
-            items = []
-            for q in quests:
-                value = int(getattr(metrics, q.metric, 0) or 0) if q.metric in self.METRICS else 0
-                if q.id not in done and value >= q.target:
-                    repo.quests.mark_completed(user_id, q.id)  # vừa hoàn thành -> lưu lại
-                    done[q.id] = datetime.now(timezone.utc)
+    def buy(self, username: str, code: str) -> dict:
+        """Trừ vàng và cấp chibi trong CÙNG 1 giao dịch: cấp chibi lỗi thì vàng được hoàn lại."""
+        with self.db.session() as repo:
+            user_id = repo.users.require_id(username)
+            chibi = repo.chibis.find_by_code(code)
+            if not chibi:
+                raise HTTPException(status_code=404, detail="Không tìm thấy chibi này")
+
+            repo.chibis.grant_defaults(user_id)
+            if chibi.code in repo.chibis.unlocked_codes(user_id):
+                raise HTTPException(status_code=409, detail="Bạn đã sở hữu chibi này rồi")
+
+            price = int(chibi.price or 0)
+            if price <= 0:
+                raise HTTPException(status_code=404, detail="Chibi này không bán trong cửa hàng")
+
+            # Trừ vàng bằng 1 câu lệnh nguyên tử, tránh 2 yêu cầu mua cùng lúc tiêu quá số vàng đang có.
+            if not repo.users.spend_gold(user_id, price):
+                raise HTTPException(status_code=400, detail=f"Không đủ vàng, cần {price} vàng để mua chibi này")
+
+            try:
+                repo.chibis.unlock(user_id, chibi.id)
+            except pyodbc.IntegrityError:
+                # Hai yêu cầu mua trùng nhau: UNIQUE (user_id, chibi_id) chặn cái thứ hai -> rollback hoàn vàng.
+                raise HTTPException(status_code=409, detail="Bạn đã sở hữu chibi này rồi")
+
+            gold = repo.users.get_gold(user_id)
+        return {"chibi_code": chibi.code, "price": price, "gold": gold}
+
+
+class GameHistoryService:
+    """Đọc lịch sử chơi (bảng game_history). Việc GHI nằm trong GameService / ChessService
+    để điểm số và lịch sử luôn được lưu cùng 1 giao dịch."""
+
+    def __init__(self, db: Database, config: Settings):
+        self.db, self.config = db, config
+
+    def list_for(self, username: str, game_type: Optional[str], limit: Optional[int]) -> dict:
+        size = self.config.history_default_limit if limit is None \
+            else max(1, min(int(limit), self.config.history_max_limit))
+        kind = (game_type or "").strip().lower()
+        kind = kind if kind in ("tetris", "chess") else None
+
+        with self.db.session() as repo:
+            user_id = repo.users.require_id(username)
+            rows = repo.history.latest(user_id, kind, size)
+            s = repo.history.summary(user_id)
+
+        history = [
+            {
+                "id": r.id,
+                "game_type": r.game_type,
+                "result": r.result,
+                "score": r.score,
+                "score_delta": r.score_delta,
+                "opponent_name": r.opponent_name,
+                "opponent_public_id": r.opponent_public_id,
+                "room_code": r.room_code,
+                "duration_seconds": r.duration_seconds,
+                "played_at": to_utc_iso(r.played_at),
+            }
+            for r in rows
+        ]
+        summary = {
+            "tetris_games": int(s.tetris_games or 0) if s else 0,
+            "tetris_best": int(s.tetris_best or 0) if s else 0,
+            "chess_games": int(s.chess_games or 0) if s else 0,
+            "chess_wins": int(s.chess_wins or 0) if s else 0,
+            "chess_losses": int(s.chess_losses or 0) if s else 0,
+            "chess_draws": int(s.chess_draws or 0) if s else 0,
+        }
+        return {"history": history, "summary": summary}
+
+
+class QuestService:
+    """Nhiệm vụ TỰ ĐỘNG: mỗi lần mở danh sách, server đối chiếu dữ liệu THẬT trong CSDL với điều kiện
+    của từng nhiệm vụ (cột quests.quest_type, hoặc quests.metric + quests.target nếu quest_type để trống).
+    Nhiệm vụ nào vừa đạt thì ghi vào user_quests và giữ mãi (kể cả sau này chỉ số tụt).
+    Mỗi nhiệm vụ hoàn thành LẦN ĐẦU được cộng vàng (settings.quest_reward_gold)."""
+
+    def __init__(self, db: Database, config: Settings):
+        self.db, self.config = db, config
+
+    @staticmethod
+    def _is_met_by_metric(metric, target: int, p) -> bool:
+        key = (metric or "").strip().lower()
+        if key == "matches":
+            return p.total_matches >= target
+        if key == "high_score":
+            return p.high_score >= target
+        if key == "chess_score":
+            return p.chess_score >= target
+        if key == "friends":
+            return p.friends >= target
+        if key == "messages_sent":
+            return p.messages_sent >= target
+        if key == "profile_complete":
+            return bool(p.has_nickname) and bool(p.has_avatar)
+        if key == "chibi_active":
+            return bool(p.has_chibi)
+        return False
+
+    def _is_met(self, repo, username: str, q, p) -> bool:
+        """Kiểm tra 1 nhiệm vụ đã đủ điều kiện chưa, dựa trên dữ liệu thật của tài khoản."""
+        target = int(q.target or 0)
+        qtype = (q.quest_type or "").strip()
+        if not qtype:  # nhiệm vụ khai báo bằng metric + target
+            return self._is_met_by_metric(q.metric, target, p)
+
+        total = p.high_score + p.chess_score
+        if qtype == "NICKNAME":
+            return bool(p.has_nickname)
+        if qtype == "AVATAR":
+            return bool(p.has_avatar)
+        if qtype == "TETRIS_PLAYED":
+            return p.high_score > 0
+        if qtype == "TETRIS_SCORE":
+            return p.high_score >= target
+        if qtype == "CHESS_PLAYED":
+            return p.chess_score != 0  # thắng/thua đổi chess_score (+/-100); hoà thì không đổi nên không tính
+        if qtype == "FRIEND":
+            return p.friends >= 1
+        if qtype == "MESSAGE":
+            return p.messages_sent >= 1
+        if qtype == "CHIBI":
+            return bool(p.has_chibi)
+        if qtype == "TOP_RANK":
+            if total <= 0:
+                return False
+            rank = repo.users.rank_of(username) or 0
+            return 1 <= rank <= target
+        if qtype == "TOTAL_SCORE":
+            return total >= target
+        return False
+
+    def list_for(self, username: str) -> dict:
+        reward = self.config.quest_reward_gold
+        with self.db.session() as repo:
+            user_id = repo.users.require_id(username)
+            profile = repo.quests.profile(username)
+            rows = repo.quests.list_with_status(user_id)
+
+            items, done_count, newly_done = [], 0, 0
+            for q in rows:
+                done = bool(q.done)
+                if not done and profile and self._is_met(repo, username, q, profile):
+                    if repo.quests.mark_done(user_id, q.id, reward):  # vừa hoàn thành -> lưu + cộng vàng
+                        newly_done += 1
+                    done = True
+                if done:
+                    done_count += 1
                 items.append({
-                    "code": q.code,
+                    "id": q.id,
                     "title": q.title,
                     "description": q.description,
-                    "icon": q.icon,
-                    "progress": q.target if q.id in done else max(0, min(value, q.target)),
-                    "target": q.target,
-                    "completed": q.id in done,
-                    "completed_at": to_iso(done[q.id]) if q.id in done else None,
+                    "done": done,
+                    "reward_gold": reward,
                 })
-        return {"completed_count": sum(1 for i in items if i["completed"]),
-                "total": len(items), "quests": items}
+            gold = repo.users.get_gold(user_id)
+        return {
+            "quests": items,
+            "done_count": done_count,
+            "total": len(items),
+            "gold_earned": newly_done * reward,
+            "gold": gold,
+        }
+
+    def sync_completed(self, username: str) -> int:
+        """Quét các nhiệm vụ CHƯA hoàn thành; cái nào đã đủ điều kiện thì ghi vào user_quests.
+        Trigger trong CSDL sẽ tự tạo thông báo. Trả về số nhiệm vụ vừa hoàn thành trong lần quét này."""
+        reward = self.config.quest_reward_gold
+        newly_done = 0
+        with self.db.session() as repo:
+            user_id = repo.users.require_id(username)
+            profile = repo.quests.profile(username)
+            if not profile:
+                return 0
+            for q in repo.quests.list_pending(user_id):
+                if self._is_met(repo, username, q, profile) and repo.quests.mark_done(user_id, q.id, reward):
+                    newly_done += 1
+        return newly_done
+
+
+class NotificationService:
+    """Thông báo của tài khoản. Thông báo do CSDL tự tạo (trigger); service này chỉ đọc / đánh dấu đã đọc.
+    Riêng nhiệm vụ: chỉ được ghi nhận khi QuestService quét dữ liệu, nên trước khi trả thông báo ta nhờ
+    QuestService quét 1 lần -> người chơi đủ điều kiện là có thông báo ngay, không cần vào trang Nhiệm vụ."""
+
+    def __init__(self, db: Database, config: Settings, quests: QuestService):
+        self.db, self.config, self.quests = db, config, quests
+        self._last_sync: dict[int, float] = {}  # user_id -> thời điểm quét nhiệm vụ gần nhất
+
+    def _sync_quests(self, username: str, user_id: int, force: bool):
+        now = time.time()
+        if not force:
+            last = self._last_sync.get(user_id)
+            if last is not None and now - last < self.config.quest_sync_interval_seconds:
+                return  # frontend hỏi định kỳ: tối đa 1 lần quét / 15 giây / người
+        self._last_sync[user_id] = now
+        try:
+            self.quests.sync_completed(username)
+        except Exception as e:
+            # Lỗi khi quét nhiệm vụ không được làm hỏng việc xem thông báo.
+            print(f"Không quét được nhiệm vụ cho user {user_id}: {e!r}")
+
+    def _user_id(self, username: str) -> int:
+        with self.db.session() as repo:
+            return repo.users.require_id(username)
+
+    def list_for(self, username: str, limit: int) -> dict:
+        user_id = self._user_id(username)
+        self._sync_quests(username, user_id, force=True)
+        size = self.config.notification_default_limit if limit <= 0 \
+            else min(limit, self.config.notification_max_limit)
+        with self.db.session() as repo:
+            rows = repo.notifications.latest(user_id, size)
+            unread = repo.notifications.count_unread(user_id)
+        return {
+            "notifications": [
+                {
+                    "id": r.id,
+                    "type": r.notif_type,
+                    "content": r.content,
+                    "is_read": bool(r.is_read),
+                    "created_at": to_utc_iso(r.created_at, trim_seconds=True),
+                }
+                for r in rows
+            ],
+            "unread": unread,
+        }
+
+    def unread_count(self, username: str) -> dict:
+        user_id = self._user_id(username)
+        self._sync_quests(username, user_id, force=False)
+        with self.db.session() as repo:
+            return {"unread": repo.notifications.count_unread(user_id)}
+
+    def mark_read(self, username: str, notification_id: int) -> dict:
+        with self.db.session() as repo:
+            user_id = repo.users.require_id(username)
+            repo.notifications.mark_read(notification_id, user_id)
+            return {"unread": repo.notifications.count_unread(user_id)}
+
+    def mark_all_read(self, username: str) -> dict:
+        with self.db.session() as repo:
+            user_id = repo.users.require_id(username)
+            repo.notifications.mark_all_read(user_id)
+        return {"unread": 0}
 
 
 # ======================================================================
@@ -1130,6 +1567,8 @@ class GameService:
                 raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
             new_high = max(stats.high_score, score)
             repo.users.save_play_stats(username, new_high, stats.total_matches + 1)
+            # Ghi lịch sử chơi cùng giao dịch với việc cập nhật điểm.
+            repo.history.record_tetris(repo.users.require_id(username), score, int(elapsed))
         return {"message": "Cập nhật điểm thành công", "high_score": new_high}
 
 
@@ -1176,8 +1615,15 @@ class ChessService:
             return {"message": "Kết quả 2 người chơi báo cáo không khớp nhau, không tính điểm", "applied": False}
 
         with self.db.session() as repo:
+            ids = {uname: repo.users.get_id(uname) for uname in final}
             for uname, info in final.items():
-                repo.users.add_chess_result(uname, self._delta(info["result"]))
+                if ids[uname] is None:
+                    continue
+                delta = self._delta(info["result"])
+                repo.users.add_chess_result(uname, delta)
+                # Đối thủ = người còn lại trong phòng.
+                opponent_id = next((i for n, i in ids.items() if n != uname), None)
+                repo.history.record_chess(ids[uname], info["result"], delta, opponent_id, room_code)
         return {"message": "Đã cập nhật điểm cờ vua", "applied": True, "delta": self._delta(result)}
 
 
@@ -1199,7 +1645,10 @@ class GameZoneAPI:
         self.messages = MessageService(self.db, self.connections)
         self.game = GameService(self.db, config)
         self.chess = ChessService(self.db, config)
-        self.quests = QuestService(self.db)
+        self.quests = QuestService(self.db, config)
+        self.chibis = ChibiService(self.db, config)
+        self.history = GameHistoryService(self.db, config)
+        self.notifications = NotificationService(self.db, config, self.quests)
 
         # FastAPI
         self.app = FastAPI()
@@ -1227,6 +1676,14 @@ class GameZoneAPI:
         r.add_api_route("/search-users", self.search_users, methods=["GET"])
         r.add_api_route("/profile/{public_id}", self.profile, methods=["GET"])
         r.add_api_route("/quests", self.list_quests, methods=["GET"])
+        r.add_api_route("/chibis", self.list_chibis, methods=["GET"])
+        r.add_api_route("/chibis/{code}/buy", self.buy_chibi, methods=["POST"])
+        r.add_api_route("/game-history", self.game_history, methods=["GET"])
+        # Thông báo (đặt unread-count / read-all trước /{notification_id}/read cho dễ đọc)
+        r.add_api_route("/notifications", self.list_notifications, methods=["GET"])
+        r.add_api_route("/notifications/unread-count", self.notifications_unread_count, methods=["GET"])
+        r.add_api_route("/notifications/read-all", self.notifications_read_all, methods=["POST"])
+        r.add_api_route("/notifications/{notification_id}/read", self.notification_read, methods=["POST"])
         # Điểm số
         r.add_api_route("/start-game", self.start_game, methods=["POST"])
         r.add_api_route("/update-score", self.update_score, methods=["POST"])
@@ -1276,6 +1733,29 @@ class GameZoneAPI:
 
     def list_quests(self, username: str = CurrentUser):
         return self.quests.list_for(username)
+
+    def list_chibis(self, username: str = CurrentUser):
+        return self.chibis.list_for(username)
+
+    def buy_chibi(self, code: str, username: str = CurrentUser):
+        return self.chibis.buy(username, code)
+
+    def game_history(self, game_type: Optional[str] = None, limit: Optional[int] = None,
+                     username: str = CurrentUser):
+        return self.history.list_for(username, game_type, limit)
+
+    # ---------- Thông báo ----------
+    def list_notifications(self, limit: int = 30, username: str = CurrentUser):
+        return self.notifications.list_for(username, limit)
+
+    def notifications_unread_count(self, username: str = CurrentUser):
+        return self.notifications.unread_count(username)
+
+    def notifications_read_all(self, username: str = CurrentUser):
+        return self.notifications.mark_all_read(username)
+
+    def notification_read(self, notification_id: int, username: str = CurrentUser):
+        return self.notifications.mark_read(username, notification_id)
 
     # ---------- Điểm số ----------
     def start_game(self, username: str = CurrentUser):
