@@ -123,6 +123,7 @@ let s = {
   unlockedChibiCodes  : new Set(), // mã các chibi tài khoản đã mở khoá (lấy từ server, bảng user_chibis)
   chibisLoaded        : false,
   gold                : 0,          // số vàng của tài khoản (lấy từ server)
+  claimingQuest       : false,      // đang gửi yêu cầu nhận vàng nhiệm vụ (chặn bấm đúp)
   chibiPrices         : {},         // code chibi -> giá bán (vàng), 0 = không bán
   shopBusy            : false,      // đang gửi yêu cầu mua
   gameHistory         : [],
@@ -473,20 +474,53 @@ async function fetchQuests(){
   }
 }
 
+async function claimQuest(id){
+  if (s.claimingQuest) return;
+  s.claimingQuest = true;
+  try {
+    const res = await authFetch(`${API_URL}/quests/${encodeURIComponent(id)}/claim`, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(data.detail || "Không nhận được vàng");
+      fetchQuests();
+      return;
+    }
+    const q = s.quests.find(x => x.id === id);
+    if (q) q.claimed = true;
+    if (data.gold !== undefined) s.gold = Number(data.gold) || 0;
+  } catch (err) {
+    console.error("Lỗi nhận vàng nhiệm vụ:", err);
+    alert("Không kết nối được tới máy chủ Backend!");
+  } finally {
+    s.claimingQuest = false;
+  }
+  if (s.view === "quests") render();
+}
+
+function questActionHtml(q){
+  const reward = Number(q.reward_gold) || 0;
+  if (!q.done) {
+    return `<span class="quest-reward">🪙 ${reward}</span><span class="quest-status quest-status-pending">Chưa hoàn thành</span>`;
+  }
+  if (q.claimed) {
+    return `<span class="quest-status quest-claimed">✓ Đã nhận 🪙 ${reward}</span>`;
+  }
+  return `<button type="button" class="quest-claim-btn" onclick="claimQuest(${Number(q.id)})">Nhận 🪙 ${reward}</button>`;
+}
+
 function questsView(){
   const total = s.quests.length;
   const done = s.quests.filter(q => q.done).length;
+  const claimable = s.quests.filter(q => q.done && !q.claimed).length;
   const pct = total ? Math.round(done * 100 / total) : 0;
 
-  const rowsHtml = s.quests.map((q, i) => `<div class="quest-row${q.done ? " done" : ""}">
+  const rowsHtml = s.quests.map((q, i) => `<div class="quest-row${q.done ? " done" : ""}${q.done && !q.claimed ? " claimable" : ""}">
       <div class="quest-index">${q.done ? "✓" : i + 1}</div>
       <div class="quest-info">
         <div class="quest-title">${esc(q.title)}</div>
         <div class="quest-desc">${esc(q.description)}</div>
       </div>
-      ${q.done
-        ? `<span class="quest-status">Đã hoàn thành</span>`
-        : `<span class="quest-status quest-status-pending">Chưa hoàn thành</span>`}
+      <div class="quest-actions">${questActionHtml(q)}</div>
     </div>`).join("");
 
   const emptyHtml = `<div class="nav-search-empty" style="padding:2rem 1rem">
@@ -500,7 +534,7 @@ function questsView(){
       <section class="section">
         <div class="section-title">Nhiệm vụ</div>
         <h3>Hoàn thành nhiệm vụ (${done}/${total})</h3>
-        <div class="quest-hint">Nhiệm vụ được hệ thống tự ghi nhận khi bạn hoàn thành. Làm xong quay lại trang này để xem.</div>
+        <div class="quest-hint">Nhiệm vụ được hệ thống tự ghi nhận khi bạn hoàn thành. Mỗi nhiệm vụ nhận được <b>🪙 10 vàng</b> — bấm <b>Nhận</b> để lấy.${claimable ? ` Bạn có <b>${claimable}</b> phần thưởng chưa nhận!` : ""}</div>
         <div class="quest-progress"><div class="quest-progress-bar" style="width:${pct}%"></div></div>
         <div class="leaderboard quest-list">${rowsHtml || emptyHtml}</div>
       </section>
