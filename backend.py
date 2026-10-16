@@ -70,6 +70,7 @@ class Settings:
     game_session_ttl_seconds: int = 60 * 60
     min_play_seconds: int = 2
     max_score_per_second: int = 1000
+    badge_diamond_score: int = 4800   # tổng điểm để đạt rank Kim Cương (= 6 đại bậc x 4 tiểu bậc x 200 điểm, khớp bảng rank ở app.js)
     max_snake_score_per_second: int = 300   # trần điểm rắn săn mồi / giây (mồi vàng +50, mỗi bước tối đa 1 mồi)
 
     # Phòng đấu & cờ vua
@@ -92,6 +93,30 @@ NO_PUBLIC_ID = "--------"
 # Tổng điểm xếp hạng = Tetris (high_score) + cờ vua (chess_score) + rắn săn mồi (snake_score)
 TOTAL_SCORE = "(ISNULL(high_score, 0) + ISNULL(chess_score, 0) + ISNULL(snake_score, 0))"
 TOTAL_SCORE_U = "(ISNULL(u.high_score, 0) + ISNULL(u.chess_score, 0) + ISNULL(u.snake_score, 0))"
+def compute_badges(m, rank, config) -> list[str]:
+    """Danh sách mã huy hiệu mà người chơi ĐÃ ĐẠT. Giao diện (app.js, BADGE_CATALOG) giữ phần tên/icon/mô tả."""
+    earned = []
+    if m.total_matches >= 1:
+        earned.append("rookie")                      # chơi ván đầu tiên
+    if m.tetris_best >= 500:
+        earned.append("tetris_500")                  # 500 điểm Tetris
+    if m.snake_best >= 300:
+        earned.append("snake_300")                   # 300 điểm Rắn săn mồi
+    if m.chess_wins >= 1:
+        earned.append("chess_win")                   # thắng 1 ván cờ vua
+    if m.friends >= 3:
+        earned.append("friends_3")                   # có 3 người bạn
+    if m.chibis >= 3:
+        earned.append("chibi_3")                     # sở hữu 3 chibi
+    if m.total_score >= config.badge_diamond_score:
+        earned.append("diamond")                     # rank Kim Cương
+    if rank is not None and 1 <= rank <= 3:
+        earned.append("top3")                        # top 3 bảng xếp hạng
+    if m.quests_total > 0 and m.quests_done >= m.quests_total:
+        earned.append("quest_master")                # hoàn thành mọi nhiệm vụ
+    return earned
+
+
 GAME_TYPES = ("tetris", "snake")   # game có điểm 'kỷ lục' nộp qua /update-score (cờ vua đi đường riêng)
 
 
@@ -128,6 +153,27 @@ class UserRepository(BaseRepository):
     def get_id(self, username):
         row = self._one("SELECT id FROM users WHERE username = ?", username)
         return row.id if row else None
+
+    def badge_metrics(self, user_id):
+        """Các chỉ số THẬT trong CSDL dùng để xét huy hiệu."""
+        return self._one(
+            f"""
+            SELECT
+                ISNULL(u.total_matches, 0) AS total_matches,
+                ISNULL(u.high_score, 0)    AS tetris_best,
+                ISNULL(u.snake_score, 0)   AS snake_best,
+                {TOTAL_SCORE_U}            AS total_score,
+                (SELECT COUNT(*) FROM game_history g
+                  WHERE g.user_id = u.id AND g.game_type = 'chess' AND g.result = 'win') AS chess_wins,
+                (SELECT COUNT(*) FROM friends f
+                  WHERE f.status = 'accepted' AND (f.requester_id = u.id OR f.addressee_id = u.id)) AS friends,
+                (SELECT COUNT(*) FROM user_chibis uc WHERE uc.user_id = u.id) AS chibis,
+                (SELECT COUNT(*) FROM user_quests uq WHERE uq.user_id = u.id) AS quests_done,
+                (SELECT COUNT(*) FROM quests) AS quests_total
+            FROM users u WHERE u.id = ?
+            """,
+            user_id,
+        )
 
     def display_name_of(self, user_id):
         row = self._one("SELECT COALESCE(NULLIF(LTRIM(RTRIM(nickname)), ''), username) AS name FROM users WHERE id = ?", user_id)
@@ -985,9 +1031,12 @@ class UserService:
                 repo.users.set_public_id(username, public_id)
 
             active_codes = []
+            badges = []
             if row:
                 unlocked = set(repo.chibis.unlocked_codes(row.id))
                 active_codes = [c for c in ChibiList.parse(row.active_chibi_code) if c in unlocked]
+                metrics = repo.users.badge_metrics(row.id)
+                badges = compute_badges(metrics, rank, self.config) if metrics else []
 
         return {
             "rank": f"#{rank if rank is not None else '-'}",
@@ -997,6 +1046,7 @@ class UserService:
             "avatar": (row.avatar or "") if row else "",
             "public_id": public_id or NO_PUBLIC_ID,
             "active_chibi_codes": active_codes,
+            "badges": badges,
         }
 
     def leaderboard(self, viewer: Optional[str]) -> list[dict]:
@@ -1044,6 +1094,9 @@ class UserService:
                 if my_id is not None:
                     friend_status = repo.friends.status_between(my_id, row.id)
 
+            metrics = repo.users.badge_metrics(row.id)
+            badges = compute_badges(metrics, row.rank_num, self.config) if metrics else []
+
         return {
             "display_name": row.display_name,
             "high_score": row.score,
@@ -1052,6 +1105,7 @@ class UserService:
             "rank": f"#{row.rank_num}",
             "total_matches": row.total_matches,
             "friend_status": friend_status,
+            "badges": badges,
         }
 
 
