@@ -9,7 +9,7 @@ Cách đọc file này (từ trên xuống, mỗi phần là 1 nhóm class):
   5. Schemas                       : dữ liệu client gửi lên
   6. Services (Auth/User/Chibi/History/Notification/Quest/Friend/Message) : nghiệp vụ
   7. ConnectionManager, DuelHub    : WebSocket realtime
-  8. GameService, ChessService     : điểm Tetris & cờ vua (+ ghi lịch sử chơi)
+  8. GameService, ChessService     : điểm Tetris, rắn săn mồi & cờ vua (+ ghi lịch sử chơi)
   9. GameZoneAPI                   : gắn mọi thứ thành các đường dẫn /api/...
 
 Chạy:  python -m uvicorn backend:app --reload --port 5000
@@ -70,6 +70,7 @@ class Settings:
     game_session_ttl_seconds: int = 60 * 60
     min_play_seconds: int = 2
     max_score_per_second: int = 1000
+    max_snake_score_per_second: int = 300   # trần điểm rắn săn mồi / giây (mồi vàng +50, mỗi bước tối đa 1 mồi)
 
     # Phòng đấu & cờ vua
     lobby_room_ttl_seconds: int = 15 * 60
@@ -88,8 +89,14 @@ class Settings:
 settings = Settings()
 
 NO_PUBLIC_ID = "--------"
-TOTAL_SCORE = "(ISNULL(high_score, 0) + ISNULL(chess_score, 0))"      # điểm Tetris + cờ vua
-TOTAL_SCORE_U = "(ISNULL(u.high_score, 0) + ISNULL(u.chess_score, 0))"
+# Tổng điểm xếp hạng = Tetris (high_score) + cờ vua (chess_score) + rắn săn mồi (snake_score)
+TOTAL_SCORE = "(ISNULL(high_score, 0) + ISNULL(chess_score, 0) + ISNULL(snake_score, 0))"
+TOTAL_SCORE_U = "(ISNULL(u.high_score, 0) + ISNULL(u.chess_score, 0) + ISNULL(u.snake_score, 0))"
+GAME_TYPES = ("tetris", "snake")   # game có điểm 'kỷ lục' nộp qua /update-score (cờ vua đi đường riêng)
+
+
+def normalize_game_type(value) -> str:
+    return "snake" if (value or "").strip().lower() == "snake" else "tetris"
 
 
 # ======================================================================
@@ -121,6 +128,10 @@ class UserRepository(BaseRepository):
     def get_id(self, username):
         row = self._one("SELECT id FROM users WHERE username = ?", username)
         return row.id if row else None
+
+    def display_name_of(self, user_id):
+        row = self._one("SELECT COALESCE(NULLIF(LTRIM(RTRIM(nickname)), ''), username) AS name FROM users WHERE id = ?", user_id)
+        return row.name if row else "Một người chơi"
 
     def require_id(self, username):
         user_id = self.get_id(username)
@@ -195,6 +206,19 @@ class UserRepository(BaseRepository):
             high_score, total_matches, username,
         )
 
+    def get_snake_stats(self, username):
+        return self._one(
+            "SELECT ISNULL(snake_score, 0) AS snake_score, ISNULL(total_matches, 0) AS total_matches "
+            "FROM users WHERE username = ?",
+            username,
+        )
+
+    def save_snake_stats(self, username, snake_score, total_matches):
+        self._run(
+            "UPDATE users SET snake_score = ?, total_matches = ? WHERE username = ?",
+            snake_score, total_matches, username,
+        )
+
     def add_chess_result(self, username, delta):
         self._run(
             "UPDATE users SET chess_score = ISNULL(chess_score, 0) + ?, "
@@ -237,6 +261,7 @@ class UserRepository(BaseRepository):
     def get_stats(self, username):
         return self._one(
             f"SELECT id, ISNULL(total_matches, 0) AS total_matches, {TOTAL_SCORE} AS score, "
+            "ISNULL(snake_score, 0) AS snake_score, "
             "avatar, public_id, active_chibi_code FROM users WHERE username = ?",
             username,
         )
@@ -436,7 +461,8 @@ class QuestRepository(BaseRepository):
     def list_with_status(self, user_id):
         return self._all(
             "SELECT q.id, q.title, q.description, q.quest_type, q.metric, q.target, "
-            "       CASE WHEN uq.quest_id IS NULL THEN 0 ELSE 1 END AS done "
+            "       CASE WHEN uq.quest_id IS NULL THEN 0 ELSE 1 END AS done, "
+            "       CASE WHEN uq.quest_id IS NOT NULL AND ISNULL(uq.claimed, 0) = 1 THEN 1 ELSE 0 END AS claimed "
             "FROM quests q "
             "LEFT JOIN user_quests uq ON uq.quest_id = q.id AND uq.user_id = ? "
             "ORDER BY q.sort_order, q.id",
@@ -460,6 +486,7 @@ class QuestRepository(BaseRepository):
                 ISNULL(u.total_matches, 0) AS total_matches,
                 ISNULL(u.high_score, 0)    AS high_score,
                 ISNULL(u.chess_score, 0)   AS chess_score,
+                ISNULL(u.snake_score, 0)   AS snake_score,
                 CASE WHEN LTRIM(RTRIM(ISNULL(u.nickname, ''))) <> '' THEN 1 ELSE 0 END AS has_nickname,
                 CASE WHEN ISNULL(u.avatar, '') <> '' THEN 1 ELSE 0 END AS has_avatar,
                 CASE WHEN LTRIM(RTRIM(ISNULL(u.active_chibi_code, ''))) <> '' THEN 1 ELSE 0 END AS has_chibi,
@@ -471,18 +498,38 @@ class QuestRepository(BaseRepository):
             username,
         )
 
-    def mark_done(self, user_id, quest_id, reward_gold):
-        """Ghi nhận hoàn thành + cộng vàng thưởng trong CÙNG 1 batch SQL. Chỉ cộng vàng khi dòng
-        user_quests thực sự được chèn mới nên gọi lại nhiều lần không bị cộng trùng.
-        Trả về True nếu đây là lần hoàn thành đầu tiên."""
+    def mark_done(self, user_id, quest_id):
+        """Ghi nhận hoàn thành (CHƯA cộng vàng — người chơi phải bấm Nhận). Chỉ chèn khi chưa có dòng
+        user_quests nên gọi lại nhiều lần không sao. Trả về True nếu đây là lần hoàn thành đầu tiên."""
         row = self._one(
             "SET NOCOUNT ON; "
             "DECLARE @ins TABLE (quest_id BIGINT); "
             "IF NOT EXISTS (SELECT 1 FROM user_quests WHERE user_id = ? AND quest_id = ?) "
-            "    INSERT INTO user_quests (user_id, quest_id) OUTPUT inserted.quest_id INTO @ins VALUES (?, ?); "
-            "UPDATE users SET gold = ISNULL(gold, 0) + ? WHERE id = ? AND EXISTS (SELECT 1 FROM @ins); "
+            "    INSERT INTO user_quests (user_id, quest_id, claimed) OUTPUT inserted.quest_id INTO @ins VALUES (?, ?, 0); "
             "SELECT COUNT(*) FROM @ins;",
-            user_id, quest_id, user_id, quest_id, reward_gold, user_id,
+            user_id, quest_id, user_id, quest_id,
+        )
+        return bool(row and row[0] > 0)
+
+    def quest_state(self, user_id, quest_id):
+        """None = chưa hoàn thành; 0 = hoàn thành chưa nhận vàng; 1 = đã nhận."""
+        row = self._one(
+            "SELECT ISNULL(claimed, 0) AS claimed FROM user_quests WHERE user_id = ? AND quest_id = ?",
+            user_id, quest_id,
+        )
+        return None if row is None else int(row.claimed)
+
+    def claim(self, user_id, quest_id, reward_gold):
+        """Đánh dấu đã nhận + cộng vàng trong CÙNG 1 batch SQL. Chỉ cộng khi dòng thực sự chuyển
+        từ claimed=0 sang 1 nên bấm nhiều lần / bấm song song cũng không bị cộng trùng."""
+        row = self._one(
+            "SET NOCOUNT ON; "
+            "DECLARE @c TABLE (quest_id BIGINT); "
+            "UPDATE user_quests SET claimed = 1 OUTPUT inserted.quest_id INTO @c "
+            "WHERE user_id = ? AND quest_id = ? AND ISNULL(claimed, 0) = 0; "
+            "UPDATE users SET gold = ISNULL(gold, 0) + ? WHERE id = ? AND EXISTS (SELECT 1 FROM @c); "
+            "SELECT COUNT(*) FROM @c;",
+            user_id, quest_id, reward_gold, user_id,
         )
         return bool(row and row[0] > 0)
 
@@ -533,6 +580,13 @@ class GameHistoryRepository(BaseRepository):
             user_id, score, duration_seconds,
         )
 
+    def record_snake(self, user_id, score, duration_seconds):
+        self._run(
+            "INSERT INTO game_history (user_id, game_type, score, score_delta, duration_seconds) "
+            "VALUES (?, 'snake', ?, 0, ?)",
+            user_id, score, duration_seconds,
+        )
+
     def record_chess(self, user_id, result, score_delta, opponent_id, room_code):
         self._run(
             "INSERT INTO game_history (user_id, game_type, result, score_delta, opponent_id, room_code) "
@@ -562,6 +616,8 @@ class GameHistoryRepository(BaseRepository):
             SELECT
                 SUM(CASE WHEN game_type = 'tetris' THEN 1 ELSE 0 END) AS tetris_games,
                 MAX(CASE WHEN game_type = 'tetris' THEN score END)    AS tetris_best,
+                SUM(CASE WHEN game_type = 'snake' THEN 1 ELSE 0 END)  AS snake_games,
+                MAX(CASE WHEN game_type = 'snake' THEN score END)     AS snake_best,
                 SUM(CASE WHEN game_type = 'chess' THEN 1 ELSE 0 END)  AS chess_games,
                 SUM(CASE WHEN game_type = 'chess' AND result = 'win'  THEN 1 ELSE 0 END) AS chess_wins,
                 SUM(CASE WHEN game_type = 'chess' AND result = 'loss' THEN 1 ELSE 0 END) AS chess_losses,
@@ -573,7 +629,15 @@ class GameHistoryRepository(BaseRepository):
 
 
 class NotificationRepository(BaseRepository):
-    """Bảng notifications. Thông báo do DATABASE tự tạo (trigger); ở đây chỉ đọc / đánh dấu đã đọc."""
+    """Bảng notifications. Thông báo nhiệm vụ do DATABASE tự tạo (trigger); thông báo kết bạn do
+    FriendService tạo qua create(). Ở đây còn đọc / đánh dấu đã đọc."""
+
+    def create(self, user_id, notif_type, content):
+        self._run(
+            "INSERT INTO notifications (user_id, notif_type, content, is_read, created_at) "
+            "VALUES (?, ?, ?, 0, SYSUTCDATETIME())",
+            user_id, notif_type, content,
+        )
 
     def latest(self, user_id, limit):
         return self._all(
@@ -742,6 +806,7 @@ class UpdateAvatar(BaseModel):
 class GameScore(BaseModel):
     score: int
     session_token: str
+    game_type: str = "tetris"  # "tetris" | "snake"
 
 
 class SetActiveChibi(BaseModel):
@@ -927,7 +992,8 @@ class UserService:
         return {
             "rank": f"#{rank if rank is not None else '-'}",
             "total_matches": row.total_matches if row else 0,
-            "high_score": row.score if row else 0,
+            "high_score": row.score if row else 0,          # TỔNG điểm xếp hạng (Tetris + cờ + rắn)
+            "snake_score": int(row.snake_score) if row else 0,  # kỷ lục riêng của rắn săn mồi
             "avatar": (row.avatar or "") if row else "",
             "public_id": public_id or NO_PUBLIC_ID,
             "active_chibi_codes": active_codes,
@@ -998,6 +1064,14 @@ class FriendService:
         """Trả về (id của mình, id đối phương)."""
         return repo.users.require_id(username), repo.users.require_by_public_id(public_id).id
 
+    @staticmethod
+    def _notify(repo, to_user_id: int, content: str):
+        """Tạo thông báo kết bạn. Lỗi tạo thông báo không được làm hỏng thao tác kết bạn."""
+        try:
+            repo.notifications.create(to_user_id, "friend_request", content)
+        except Exception as e:
+            print(f"Không tạo được thông báo kết bạn cho user {to_user_id}: {e!r}")
+
     def send_request(self, username: str, public_id: str) -> dict:
         with self.db.session() as repo:
             my_id, target_id = self._resolve(repo, username, public_id)
@@ -1012,9 +1086,11 @@ class FriendService:
                     raise HTTPException(status_code=400, detail="Bạn đã gửi lời mời kết bạn trước đó")
                 # Đối phương đã mời mình từ trước -> chấp nhận luôn.
                 repo.friends.accept(target_id, my_id)
+                self._notify(repo, target_id, f"{repo.users.display_name_of(my_id)} đã chấp nhận lời mời kết bạn của bạn")
                 return {"message": "Đã chấp nhận lời mời kết bạn", "friend_status": "friends"}
 
             repo.friends.create_request(my_id, target_id)
+            self._notify(repo, target_id, f"{repo.users.display_name_of(my_id)} đã gửi cho bạn một lời mời kết bạn")
         return {"message": "Đã gửi lời mời kết bạn", "friend_status": "pending_sent"}
 
     def respond(self, username: str, public_id: str, action: str) -> dict:
@@ -1029,6 +1105,7 @@ class FriendService:
 
             if action == "accept":
                 repo.friends.accept(target_id, my_id)
+                self._notify(repo, target_id, f"{repo.users.display_name_of(my_id)} đã chấp nhận lời mời kết bạn của bạn")
                 return {"message": "Đã chấp nhận kết bạn", "friend_status": "friends"}
             repo.friends.delete_request(target_id, my_id)
         return {"message": "Đã từ chối lời mời kết bạn", "friend_status": "none"}
@@ -1125,7 +1202,7 @@ class GameHistoryService:
         size = self.config.history_default_limit if limit is None \
             else max(1, min(int(limit), self.config.history_max_limit))
         kind = (game_type or "").strip().lower()
-        kind = kind if kind in ("tetris", "chess") else None
+        kind = kind if kind in ("tetris", "snake", "chess") else None
 
         with self.db.session() as repo:
             user_id = repo.users.require_id(username)
@@ -1150,6 +1227,8 @@ class GameHistoryService:
         summary = {
             "tetris_games": int(s.tetris_games or 0) if s else 0,
             "tetris_best": int(s.tetris_best or 0) if s else 0,
+            "snake_games": int(s.snake_games or 0) if s else 0,
+            "snake_best": int(s.snake_best or 0) if s else 0,
             "chess_games": int(s.chess_games or 0) if s else 0,
             "chess_wins": int(s.chess_wins or 0) if s else 0,
             "chess_losses": int(s.chess_losses or 0) if s else 0,
@@ -1162,7 +1241,7 @@ class QuestService:
     """Nhiệm vụ TỰ ĐỘNG: mỗi lần mở danh sách, server đối chiếu dữ liệu THẬT trong CSDL với điều kiện
     của từng nhiệm vụ (cột quests.quest_type, hoặc quests.metric + quests.target nếu quest_type để trống).
     Nhiệm vụ nào vừa đạt thì ghi vào user_quests và giữ mãi (kể cả sau này chỉ số tụt).
-    Mỗi nhiệm vụ hoàn thành LẦN ĐẦU được cộng vàng (settings.quest_reward_gold)."""
+    Hoàn thành xong người chơi phải BẤM NHẬN để lấy vàng (settings.quest_reward_gold / nhiệm vụ, nhận 1 lần)."""
 
     def __init__(self, db: Database, config: Settings):
         self.db, self.config = db, config
@@ -1176,6 +1255,8 @@ class QuestService:
             return p.high_score >= target
         if key == "chess_score":
             return p.chess_score >= target
+        if key == "snake_score":
+            return p.snake_score >= target
         if key == "friends":
             return p.friends >= target
         if key == "messages_sent":
@@ -1193,7 +1274,7 @@ class QuestService:
         if not qtype:  # nhiệm vụ khai báo bằng metric + target
             return self._is_met_by_metric(q.metric, target, p)
 
-        total = p.high_score + p.chess_score
+        total = p.high_score + p.chess_score + p.snake_score
         if qtype == "NICKNAME":
             return bool(p.has_nickname)
         if qtype == "AVATAR":
@@ -1204,6 +1285,10 @@ class QuestService:
             return p.high_score >= target
         if qtype == "CHESS_PLAYED":
             return p.chess_score != 0  # thắng/thua đổi chess_score (+/-100); hoà thì không đổi nên không tính
+        if qtype == "SNAKE_PLAYED":
+            return p.snake_score > 0
+        if qtype == "SNAKE_SCORE":
+            return p.snake_score >= target
         if qtype == "FRIEND":
             return p.friends >= 1
         if qtype == "MESSAGE":
@@ -1226,20 +1311,22 @@ class QuestService:
             profile = repo.quests.profile(username)
             rows = repo.quests.list_with_status(user_id)
 
-            items, done_count, newly_done = [], 0, 0
+            items, done_count, claimable = [], 0, 0
             for q in rows:
-                done = bool(q.done)
+                done, claimed = bool(q.done), bool(q.claimed)
                 if not done and profile and self._is_met(repo, username, q, profile):
-                    if repo.quests.mark_done(user_id, q.id, reward):  # vừa hoàn thành -> lưu + cộng vàng
-                        newly_done += 1
+                    repo.quests.mark_done(user_id, q.id)  # vừa hoàn thành -> lưu, chờ người chơi bấm Nhận
                     done = True
                 if done:
                     done_count += 1
+                    if not claimed:
+                        claimable += 1
                 items.append({
                     "id": q.id,
                     "title": q.title,
                     "description": q.description,
                     "done": done,
+                    "claimed": claimed,
                     "reward_gold": reward,
                 })
             gold = repo.users.get_gold(user_id)
@@ -1247,14 +1334,25 @@ class QuestService:
             "quests": items,
             "done_count": done_count,
             "total": len(items),
-            "gold_earned": newly_done * reward,
+            "claimable": claimable,
             "gold": gold,
         }
+
+    def claim(self, username: str, quest_id: int) -> dict:
+        reward = self.config.quest_reward_gold
+        with self.db.session() as repo:
+            user_id = repo.users.require_id(username)
+            state = repo.quests.quest_state(user_id, quest_id)
+            if state is None:
+                raise HTTPException(status_code=400, detail="Nhiệm vụ này chưa hoàn thành")
+            if state == 1 or not repo.quests.claim(user_id, quest_id, reward):
+                raise HTTPException(status_code=400, detail="Bạn đã nhận vàng nhiệm vụ này rồi")
+            gold = repo.users.get_gold(user_id)
+        return {"message": f"Đã nhận {reward} vàng", "reward_gold": reward, "gold": gold}
 
     def sync_completed(self, username: str) -> int:
         """Quét các nhiệm vụ CHƯA hoàn thành; cái nào đã đủ điều kiện thì ghi vào user_quests.
         Trigger trong CSDL sẽ tự tạo thông báo. Trả về số nhiệm vụ vừa hoàn thành trong lần quét này."""
-        reward = self.config.quest_reward_gold
         newly_done = 0
         with self.db.session() as repo:
             user_id = repo.users.require_id(username)
@@ -1262,7 +1360,7 @@ class QuestService:
             if not profile:
                 return 0
             for q in repo.quests.list_pending(user_id):
-                if self._is_met(repo, username, q, profile) and repo.quests.mark_done(user_id, q.id, reward):
+                if self._is_met(repo, username, q, profile) and repo.quests.mark_done(user_id, q.id):
                     newly_done += 1
         return newly_done
 
@@ -1531,8 +1629,8 @@ class DuelHub:
 # 8. ĐIỂM SỐ
 # ======================================================================
 class GameService:
-    """Điểm Tetris + chống gian lận: server phát 'phiên chơi' lúc bắt đầu ván, khi nộp điểm
-    thì so điểm với mức trần hợp lý theo thời gian chơi thật. Token dùng 1 lần.
+    """Điểm Tetris & rắn săn mồi + chống gian lận: server phát 'phiên chơi' (gắn với loại game) lúc
+    bắt đầu ván, khi nộp điểm thì so điểm với mức trần hợp lý theo thời gian chơi thật. Token dùng 1 lần.
     (Lưu trong RAM, đủ cho 1 tiến trình uvicorn; nhiều worker thì cần Redis/DB.)"""
 
     def __init__(self, db: Database, config: Settings):
@@ -1544,32 +1642,47 @@ class GameService:
         for tok in [t for t, s in self._sessions.items() if now - s["start_time"] > self.config.game_session_ttl_seconds]:
             self._sessions.pop(tok, None)
 
-    def start(self, username: str) -> dict:
+    def start(self, username: str, game_type: str = "tetris") -> dict:
         self._purge_expired()
         token = secrets.token_hex(16)
-        self._sessions[token] = {"username": username, "start_time": time.time()}
+        self._sessions[token] = {
+            "username": username,
+            "start_time": time.time(),
+            "game_type": normalize_game_type(game_type),
+        }
         return {"session_token": token}
 
-    def submit_score(self, username: str, score: int, session_token: str) -> dict:
+    def submit_score(self, username: str, score: int, session_token: str, game_type: str = "tetris") -> dict:
+        game_type = normalize_game_type(game_type)
         session = self._sessions.pop(session_token, None)  # dùng 1 lần
-        if not session or session["username"] != username:
+        if not session or session["username"] != username or session.get("game_type", "tetris") != game_type:
             raise HTTPException(status_code=400, detail="Phiên chơi không hợp lệ hoặc đã hết hạn, vui lòng chơi lại từ đầu")
 
         elapsed = time.time() - session["start_time"]
         if elapsed < self.config.min_play_seconds:
             raise HTTPException(status_code=400, detail="Kết quả không hợp lệ")
-        if score < 0 or score > elapsed * self.config.max_score_per_second:
+        cap = self.config.max_snake_score_per_second if game_type == "snake" else self.config.max_score_per_second
+        if score < 0 or score > elapsed * cap:
             raise HTTPException(status_code=400, detail="Điểm số không hợp lệ")
 
         with self.db.session() as repo:
-            stats = repo.users.get_play_stats(username)
-            if not stats:
-                raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
-            new_high = max(stats.high_score, score)
-            repo.users.save_play_stats(username, new_high, stats.total_matches + 1)
-            # Ghi lịch sử chơi cùng giao dịch với việc cập nhật điểm.
-            repo.history.record_tetris(repo.users.require_id(username), score, int(elapsed))
-        return {"message": "Cập nhật điểm thành công", "high_score": new_high}
+            user_id = repo.users.require_id(username)
+            if game_type == "snake":
+                stats = repo.users.get_snake_stats(username)
+                if not stats:
+                    raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+                new_high = max(stats.snake_score, score)
+                repo.users.save_snake_stats(username, new_high, stats.total_matches + 1)
+                # Ghi lịch sử chơi cùng giao dịch với việc cập nhật điểm.
+                repo.history.record_snake(user_id, score, int(elapsed))
+            else:
+                stats = repo.users.get_play_stats(username)
+                if not stats:
+                    raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+                new_high = max(stats.high_score, score)
+                repo.users.save_play_stats(username, new_high, stats.total_matches + 1)
+                repo.history.record_tetris(user_id, score, int(elapsed))
+        return {"message": "Cập nhật điểm thành công", "high_score": new_high, "game_type": game_type}
 
 
 class ChessService:
@@ -1676,6 +1789,7 @@ class GameZoneAPI:
         r.add_api_route("/search-users", self.search_users, methods=["GET"])
         r.add_api_route("/profile/{public_id}", self.profile, methods=["GET"])
         r.add_api_route("/quests", self.list_quests, methods=["GET"])
+        r.add_api_route("/quests/{quest_id}/claim", self.claim_quest, methods=["POST"])
         r.add_api_route("/chibis", self.list_chibis, methods=["GET"])
         r.add_api_route("/chibis/{code}/buy", self.buy_chibi, methods=["POST"])
         r.add_api_route("/game-history", self.game_history, methods=["GET"])
@@ -1734,6 +1848,9 @@ class GameZoneAPI:
     def list_quests(self, username: str = CurrentUser):
         return self.quests.list_for(username)
 
+    def claim_quest(self, quest_id: int, username: str = CurrentUser):
+        return self.quests.claim(username, quest_id)
+
     def list_chibis(self, username: str = CurrentUser):
         return self.chibis.list_for(username)
 
@@ -1758,11 +1875,11 @@ class GameZoneAPI:
         return self.notifications.mark_read(username, notification_id)
 
     # ---------- Điểm số ----------
-    def start_game(self, username: str = CurrentUser):
-        return self.game.start(username)
+    def start_game(self, game: str = "tetris", username: str = CurrentUser):
+        return self.game.start(username, game)
 
     def update_score(self, data: GameScore, username: str = CurrentUser):
-        return self.game.submit_score(username, data.score, data.session_token)
+        return self.game.submit_score(username, data.score, data.session_token, data.game_type)
 
     def report_chess_result(self, data: ChessMatchResult, username: str = CurrentUser):
         return self.chess.report_result(username, data.room_code, data.result)
