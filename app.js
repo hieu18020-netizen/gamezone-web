@@ -99,19 +99,35 @@ let s = {
   friendsIncoming: [],
   friendsOutgoing: [],
   friendsLoaded  : false,
+  quests         : [],
+  questsLoaded   : false,
+  notifications  : [],
+  notifUnread    : 0,
+  notifOpen      : false,
+  notifLoaded    : false,
+  notifLastId    : null,
   conversations       : [],
   conversationsLoaded : false,
+  conversationsError  : false,
+  activeChatError     : false,
   activeChatPublicId  : null,
   activeChatMessages  : [],
   activeChatLoading   : false,
   activeChatOldestId  : null,
   activeChatHasMore   : false,
   chatSending         : false,
-  quests              : null,   // {completed_count,total,quests:[...]} lấy từ /api/quests
-  questsLoading       : false,
   chibiFilter         : "all",
   chibiFavorites      : new Set(),
   activeChibiCodes    : new Set(), // các mã chibi đang được chọn để chạy CÙNG LÚC trên màn hình; rỗng = chưa chọn cái nào
+  unlockedChibiCodes  : new Set(), // mã các chibi tài khoản đã mở khoá (lấy từ server, bảng user_chibis)
+  chibisLoaded        : false,
+  gold                : 0,          // số vàng của tài khoản (lấy từ server)
+  chibiPrices         : {},         // code chibi -> giá bán (vàng), 0 = không bán
+  shopBusy            : false,      // đang gửi yêu cầu mua
+  gameHistory         : [],
+  gameHistorySummary  : null,
+  gameHistoryLoaded   : false,
+  historyFilter       : "all",
 };
 
 // Cho ChibiRunner chạy đúng/đủ khung hình theo trạng thái hiện tại của tài khoản.
@@ -132,7 +148,7 @@ function applyChibiRunnerState(){
 // Backend hiện không có token phiên, nên ta chỉ lưu username + dữ liệu hiển thị (không lưu mật khẩu),
 // rồi khi tải lại trang sẽ gọi API để xác thực & làm mới dữ liệu.
 const SESSION_KEY = "gz_session";
-const RESTORABLE_VIEWS = ["home", "games", "game", "friends", "messages", "chibi", "quests"]; // các view hợp lệ để khôi phục sau F5
+const RESTORABLE_VIEWS = ["home", "games", "game", "friends", "messages", "chibi", "shop", "quests", "history"]; // các view hợp lệ để khôi phục sau F5
 
 function saveSession(){
   if (!s.username) return;
@@ -182,14 +198,23 @@ function logout(){
   s.friendsIncoming = [];
   s.friendsOutgoing = [];
   s.friendsLoaded = false;
+  s.quests = [];
+  s.questsLoaded = false;
   s.conversations = [];
   s.conversationsLoaded = false;
-  s.quests = null;
   s.activeChatPublicId = null;
   s.activeChatMessages = [];
   s.activeChibiCodes = new Set();
+  s.unlockedChibiCodes = new Set();
+  s.chibisLoaded = false;
+  s.gold = 0;
+  s.chibiPrices = {};
+  s.gameHistory = [];
+  s.gameHistorySummary = null;
+  s.gameHistoryLoaded = false;
   applyChibiRunnerState();
   disconnectMessagesWS();
+  stopNotifPolling();
   go("login");
 }
 
@@ -223,7 +248,11 @@ async function restoreSession(){
     fetchLeaderboard();
     fetchFriends();
     fetchConversations();
+    fetchChibis();
+    if (s.view === "quests") fetchQuests();
+    if (s.view === "history") fetchGameHistory();
     connectMessagesWS();
+    startNotifPolling();
     render();
     return true;
   } catch (err) {
@@ -298,7 +327,6 @@ async function fetchFriends(){
       s.friendsOutgoing = data.outgoing || [];
       s.friendsLoaded = true;
       if (s.view === "friends" || s.view === "home" || s.view === "games") render();
-      else refreshDock();
     }
   } catch (err) {
     console.error("Lỗi lấy danh sách bạn bè:", err);
@@ -422,6 +450,161 @@ function friendsView(){
   </div>`;
 }
 
+// ================== NHIỆM VỤ ==================
+
+async function fetchQuests(){
+  if (!s.token) return;
+  try {
+    const res = await authFetch(`${API_URL}/quests`);
+    if (res.ok) {
+      const data = await res.json();
+      s.quests = data.quests || [];
+      s.questsLoaded = true;
+      if (data.gold !== undefined) s.gold = Number(data.gold) || 0;
+      if (s.view === "quests") render();
+      fetchNotifications(true); // nhiệm vụ vừa hoàn thành -> thông báo mới + toast
+    }
+  } catch (err) {
+    console.error("Lỗi lấy danh sách nhiệm vụ:", err);
+  }
+}
+
+function questsView(){
+  const total = s.quests.length;
+  const done = s.quests.filter(q => q.done).length;
+  const pct = total ? Math.round(done * 100 / total) : 0;
+
+  const rowsHtml = s.quests.map((q, i) => `<div class="quest-row${q.done ? " done" : ""}">
+      <div class="quest-index">${q.done ? "✓" : i + 1}</div>
+      <div class="quest-info">
+        <div class="quest-title">${esc(q.title)}</div>
+        <div class="quest-desc">${esc(q.description)}</div>
+      </div>
+      ${q.done
+        ? `<span class="quest-status">Đã hoàn thành</span>`
+        : `<span class="quest-status quest-status-pending">Chưa hoàn thành</span>`}
+    </div>`).join("");
+
+  const emptyHtml = `<div class="nav-search-empty" style="padding:2rem 1rem">
+    <span class="nav-search-empty-icon">${s.questsLoaded ? "📭" : "⏳"}</span>${s.questsLoaded ? "Chưa có nhiệm vụ nào" : "Đang tải nhiệm vụ..."}
+  </div>`;
+
+  return `<div class="home fade">
+    <div class="gridbg fixed-grid"></div>
+    ${navBar()}
+    <main class="content">
+      <section class="section">
+        <div class="section-title">Nhiệm vụ</div>
+        <h3>Hoàn thành nhiệm vụ (${done}/${total})</h3>
+        <div class="quest-hint">Nhiệm vụ được hệ thống tự ghi nhận khi bạn hoàn thành. Làm xong quay lại trang này để xem.</div>
+        <div class="quest-progress"><div class="quest-progress-bar" style="width:${pct}%"></div></div>
+        <div class="leaderboard quest-list">${rowsHtml || emptyHtml}</div>
+      </section>
+    </main>
+  </div>`;
+}
+
+// ================== LỊCH SỬ CHƠI GAME ==================
+
+async function fetchGameHistory(){
+  if (!s.token) return;
+  try {
+    const res = await authFetch(`${API_URL}/game-history?limit=100`);
+    if (res.ok) {
+      const data = await res.json();
+      s.gameHistory = data.history || [];
+      s.gameHistorySummary = data.summary || null;
+      s.gameHistoryLoaded = true;
+      if (s.view === "history") render();
+    }
+  } catch (err) {
+    console.error("Lỗi lấy lịch sử chơi:", err);
+  }
+}
+
+function setHistoryFilter(f){
+  s.historyFilter = f;
+  render();
+}
+
+function formatPlayDuration(sec){
+  const n = Math.max(0, Number(sec) || 0);
+  const m = Math.floor(n / 60);
+  const r = n % 60;
+  return m > 0 ? `${m} phút ${r} giây` : `${r} giây`;
+}
+
+function historyRowHtml(h){
+  const when = formatChatTime(h.played_at);
+
+  if (h.game_type === "chess") {
+    const resText = { win: "Thắng", loss: "Thua", draw: "Hòa" }[h.result] || "—";
+    const delta = Number(h.score_delta) || 0;
+    const badgeCls = delta > 0 ? "win" : (delta < 0 ? "loss" : "draw");
+    const badgeText = delta > 0 ? `+${delta}` : (delta < 0 ? `${delta}` : "Hòa");
+    const opp = h.opponent_name ? ` · đấu với ${esc(h.opponent_name)}` : "";
+    const room = h.room_code ? ` · phòng ${esc(h.room_code)}` : "";
+    return `<div class="quest-row history-row">
+      <div class="quest-index history-icon">♟</div>
+      <div class="quest-info">
+        <div class="quest-title">Cờ vua — ${resText}</div>
+        <div class="quest-desc">${when}${opp}${room}</div>
+      </div>
+      <span class="history-badge ${badgeCls}">${badgeText}</span>
+    </div>`;
+  }
+
+  const score = Number(h.score) || 0;
+  const dur = (h.duration_seconds !== null && h.duration_seconds !== undefined)
+    ? ` · ${formatPlayDuration(h.duration_seconds)}` : "";
+  return `<div class="quest-row history-row">
+    <div class="quest-index history-icon">🧱</div>
+    <div class="quest-info">
+      <div class="quest-title">Tetris</div>
+      <div class="quest-desc">${when}${dur}</div>
+    </div>
+    <span class="history-badge score">${score.toLocaleString("vi-VN")} điểm</span>
+  </div>`;
+}
+
+function historyView(){
+  const filters = [
+    { key: "all",    label: "Tất cả" },
+    { key: "tetris", label: "🧱 Tetris" },
+    { key: "chess",  label: "♟ Cờ vua" },
+  ];
+  const list = s.gameHistory.filter(h => s.historyFilter === "all" || h.game_type === s.historyFilter);
+  const sm = s.gameHistorySummary;
+
+  const statsHtml = sm ? `<div class="history-summary">
+      <div class="history-stat"><div class="history-stat-num">${Number(sm.tetris_games) || 0}</div><div class="history-stat-label">Ván Tetris</div></div>
+      <div class="history-stat"><div class="history-stat-num">${(Number(sm.tetris_best) || 0).toLocaleString("vi-VN")}</div><div class="history-stat-label">Điểm Tetris cao nhất</div></div>
+      <div class="history-stat"><div class="history-stat-num">${Number(sm.chess_games) || 0}</div><div class="history-stat-label">Ván cờ vua</div></div>
+      <div class="history-stat"><div class="history-stat-num">${Number(sm.chess_wins) || 0}/${Number(sm.chess_losses) || 0}/${Number(sm.chess_draws) || 0}</div><div class="history-stat-label">Thắng / Thua / Hòa</div></div>
+    </div>` : "";
+
+  const emptyHtml = `<div class="nav-search-empty" style="padding:2rem 1rem">
+    <span class="nav-search-empty-icon">${s.gameHistoryLoaded ? "📭" : "⏳"}</span>${s.gameHistoryLoaded ? "Chưa có ván chơi nào" : "Đang tải lịch sử..."}
+  </div>`;
+
+  return `<div class="home fade">
+    <div class="gridbg fixed-grid"></div>
+    ${navBar()}
+    <main class="content">
+      <section class="section">
+        <div class="section-title">Lịch sử</div>
+        <h3>Lịch sử chơi game</h3>
+        <div class="quest-hint">Hiển thị tối đa 100 ván gần nhất, ván mới nhất ở trên cùng.</div>
+        ${statsHtml}
+        <div class="chibi-filters">
+          ${filters.map(f => `<button type="button" class="chibi-filter-btn${s.historyFilter === f.key ? " active" : ""}" onclick="setHistoryFilter('${f.key}')">${f.label}</button>`).join("")}
+        </div>
+        <div class="leaderboard quest-list">${list.map(historyRowHtml).join("") || emptyHtml}</div>
+      </section>
+    </main>
+  </div>`;
+}
+
 // ================== TIN NHẮN (Messenger) ==================
 
 let messagesSocket = null;
@@ -438,11 +621,16 @@ async function fetchConversations(){
     if (res.ok) {
       s.conversations = await res.json();
       s.conversationsLoaded = true;
-      // Đang chơi game thì chỉ vẽ lại cột trái, tránh làm ván đấu bị dựng lại từ đầu.
-      if (s.view === "game") refreshDock(); else render();
+      s.conversationsError = false;
+      render();
+    } else {
+      throw new Error("HTTP " + res.status);
     }
   } catch (err) {
     console.error("Lỗi lấy danh sách hội thoại:", err);
+    s.conversationsError = (err && err.message) ? err.message : true;
+    // Chỉ vẽ lại khi đang ở trang Tin nhắn (render() ở trang khác, vd. đang chơi game, sẽ làm game khởi động lại).
+    if (s.view === "messages") render();
   }
 }
 
@@ -526,19 +714,21 @@ async function openChat(publicId){
   s.activeChatPublicId = publicId;
   s.activeChatMessages = [];
   s.activeChatLoading = true;
+  s.activeChatError = false;
   s.activeChatOldestId = null;
   s.activeChatHasMore = false;
   render();
 
   try {
     const res = await authFetch(`${API_URL}/messages/${encodeURIComponent(publicId)}`);
-    if (!res.ok) throw new Error("Không tải được tin nhắn");
+    if (!res.ok) throw new Error("Không tải được tin nhắn (HTTP " + res.status + ")");
     const data = await res.json();
     s.activeChatMessages = data.messages || [];
     s.activeChatHasMore = !!data.has_more;
     s.activeChatOldestId = s.activeChatMessages.length ? s.activeChatMessages[0].id : null;
   } catch (err) {
     console.error("Lỗi tải lịch sử tin nhắn:", err);
+    s.activeChatError = (err && err.message) ? err.message : true;
   } finally {
     s.activeChatLoading = false;
     render();
@@ -627,6 +817,12 @@ function formatChatTime(iso){
 
 function conversationListHtml(){
   if (!s.conversationsLoaded) {
+    if (s.conversationsError) {
+      return `<div class="nav-search-empty" style="padding:2rem 1rem">
+        <span class="nav-search-empty-icon">⚠️</span>Không tải được danh sách tin nhắn (${esc(typeof s.conversationsError === "string" ? s.conversationsError : "không kết nối được máy chủ")}).
+        <div style="margin-top:.8rem"><button type="button" class="friend-btn friend-btn-add" onclick="s.conversationsError=false;render();fetchConversations()">Thử lại</button></div>
+      </div>`;
+    }
     return `<div class="nav-search-empty" style="padding:2rem 1rem"><span class="nav-search-spin">◌</span> Đang tải hội thoại...</div>`;
   }
   if (s.conversations.length === 0) {
@@ -674,6 +870,11 @@ function chatPanelHtml(){
   let body;
   if (s.activeChatLoading) {
     body = `<div class="nav-search-empty" style="padding:2rem 1rem"><span class="nav-search-spin">◌</span> Đang tải tin nhắn...</div>`;
+  } else if (s.activeChatError) {
+    body = `<div class="nav-search-empty" style="padding:2rem 1rem">
+        <span class="nav-search-empty-icon">⚠️</span>Không tải được tin nhắn (${esc(typeof s.activeChatError === "string" ? s.activeChatError : "không kết nối được máy chủ")}).
+        <div style="margin-top:.8rem"><button type="button" class="friend-btn friend-btn-add" onclick="openChat('${esc(s.activeChatPublicId)}')">Thử lại</button></div>
+      </div>`;
   } else {
     const loadMoreBtn = s.activeChatHasMore
       ? `<button type="button" class="chat-load-more" onclick="loadOlderMessages()">Xem tin nhắn cũ hơn</button>`
@@ -724,7 +925,7 @@ function logo(center){
   const clickable = center ? '' : ' onclick="go(\'home\')" style="cursor:pointer"';
   return `<div class="logo${center?' center-logo':''}"${clickable}>
     <div class="logo-mark">◆</div>
-    <span class="logo-name">GameTuat</span>
+    <span class="logo-name">GameZone</span>
   </div>`;
 }
 
@@ -743,7 +944,7 @@ function pwField(id, placeholder, val, showKey, onInput){
   const type = s[showKey] ? "text" : "password";
   return `<div style="position:relative">
     <input class="input input-pw" id="${id}" type="${type}" placeholder="${placeholder}" value="${esc(val)}"
-      autocomplete="new-password" autocapitalize="off" spellcheck="false" oninput="${onInput}">
+      oninput="${onInput}">
     <button class="eye" type="button" onclick="toggle('${showKey}')">
       ${s[showKey]?"🙈":"👁"}
     </button>
@@ -837,43 +1038,38 @@ function checkPasswordMatch(val) {
   refreshRegisterButton();
 }
 
-// Các thẻ game nghiêng, nổi nhẹ ở nửa trái trang đăng nhập/đăng ký (phần intro).
-// Muốn đổi thẻ: sửa mảng INTRO_CARDS (vị trí x/y tính theo %, rot = độ nghiêng).
-const INTRO_ICONS = {
-  tetris: `<div class="ic-tetris"><i style="background:linear-gradient(135deg,#22d3ee,#06b6d4)"></i><i style="background:linear-gradient(135deg,#a78bfa,#8b5cf6)"></i><i style="background:linear-gradient(135deg,#fdba74,#fb923c)"></i><i style="background:linear-gradient(135deg,#22d3ee,#0ea5e9)"></i></div>`,
-  chess: `<div class="ic-chess">♞</div>`,
-  snake: `<svg class="ic-snake" viewBox="0 0 120 60" fill="none"><path d="M10 40 C 22 18, 42 18, 50 34 C 56 46, 70 40, 66 28 C 62 16, 82 14, 90 28" stroke="#34d399" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/><circle cx="104" cy="32" r="9" fill="#34d399"/></svg>`,
-  g2048: `<div class="ic-2048"><b style="background:#c2693a">2</b><b style="background:#d9803f">4</b><b style="background:#8b5cf6">8</b><b style="background:#6d5ae0">16</b></div>`,
-};
-const INTRO_CARDS = [
-  { icon:"tetris", tag:"ARCADE",     name:"Tetris",        desc:"Xếp khối · phá kỷ lục",        color:"#22d3ee", x:4,  y:2,  rot:-8, delay:0   },
-  { icon:"chess",  tag:"CHIẾN THUẬT", name:"Cờ vua",        desc:"Tính toán từng nước đi",       color:"#f6c453", x:50, y:12, rot:7,  delay:1.2 },
-  { icon:"snake",  tag:"ARCADE",     name:"Rắn săn mồi",   desc:"Thu thập · lớn lên · sống sót", color:"#34d399", x:16, y:46, rot:-5, delay:2.1 },
-  { icon:"g2048",  tag:"PUZZLE",     name:"2048",          desc:"Ghép số để chiến thắng",       color:"#fb923c", x:58, y:62, rot:6,  delay:.6  },
-];
-
-function introCardHtml(c){
-  return `<div class="intro-card" style="left:${c.x}%;top:${c.y}%;--rot:${c.rot}deg;--tint:${c.color};animation-delay:${c.delay}s">
-    <span class="intro-card-tag">${c.tag}</span>
-    <div class="intro-card-icon">${INTRO_ICONS[c.icon]}</div>
-    <div class="intro-card-name">${c.name}</div>
-    <div class="intro-card-desc">${c.desc}</div>
-  </div>`;
-}
-
 function leftPanel(){
+  const sq=(c)=>`<i style="background:${c}"></i>`;
   return `<aside class="left">
     <div class="gridbg gridbg-abs"></div>
     <div class="glow-gold glow-abs"></div>
+    <div class="ring ring-a"></div>
+    <div class="ring ring-b"></div>
     ${logo()}
-    <div class="intro-stage" aria-hidden="true">
-      <div class="intro-ring intro-ring-1"></div>
-      <div class="intro-ring intro-ring-2"></div>
-      <div class="intro-glow"></div>
-      ${INTRO_CARDS.map(introCardHtml).join("")}
+    <div class="left-cards">
+      <div class="gcard gc-tetris">
+        <span class="gc-tag">ARCADE</span>
+        <div class="gc-art tetris-art">${sq("#22d3ee")}${sq("#a78bfa")}${sq("#fb923c")}${sq("#22d3ee")}</div>
+        <b class="gc-name">Tetris</b><small>Xếp khối · phá kỷ lục</small>
+      </div>
+      <div class="gcard gc-chess">
+        <span class="gc-tag">CHIẾN THUẬT</span>
+        <div class="gc-art chess-art">♞</div>
+        <b class="gc-name">Cờ vua</b><small>Tính toán từng nước đi</small>
+      </div>
+      <div class="gcard gc-snake">
+        <span class="gc-tag">ARCADE</span>
+        <div class="gc-art"><svg viewBox="0 0 90 50" width="90" height="50"><path d="M6 40c12-6 14-24 26-24s10 18 22 14 10-12 22-10" fill="none" stroke="#34d399" stroke-width="9" stroke-linecap="round"/><circle cx="76" cy="20" r="2.6" fill="#0c0f1a"/></svg></div>
+        <b class="gc-name">Rắn săn mồi</b><small>Thu thập · lớn lên · sống sót</small>
+      </div>
+      <div class="gcard gc-2048">
+        <span class="gc-tag">PUZZLE</span>
+        <div class="gc-art tile-art"><i style="background:#c2703a">2</i><i style="background:#e0803a">4</i><i style="background:#8b5cf6">8</i><i style="background:#6d5ae6">16</i></div>
+        <b class="gc-name">2048</b><small>Ghép số để chiến thắng</small>
+      </div>
     </div>
-    <div class="left-main intro-text">
-      <div class="intro-eyebrow">Bộ sưu tập game của bạn</div>
+    <div class="left-main">
+      <div class="eyebrow">Bộ sưu tập game của bạn</div>
       <h1>Mỗi lần đăng nhập,<br><span>một ván mới</span></h1>
     </div>
     <div class="user-mini">
@@ -970,7 +1166,7 @@ function loginView(){
           <div class="field">
             <label>Tên đăng nhập</label>
             <input class="input" required placeholder="Nhập tên đăng nhập..."
-              id="loginUser" value="${esc(s.username)}" autocomplete="off" autocapitalize="off" spellcheck="false" oninput="s.username=this.value">
+              id="loginUser" value="${esc(s.username)}" oninput="s.username=this.value">
           </div>
           <div class="field">
             <div class="field-row">
@@ -1245,7 +1441,6 @@ const CHIBI_GALLERY = [
     code: "1", name: "Eruka", desc: "Cô bé mèo con",
     rarity: "Hiếm", element: "light",
     frontImage: "chibi/1/chinhdien.png",
-    unlocked: true,
     // Config riêng của chibi 1 — đổi số ở đây không ảnh hưởng chibi khác.
     runnerConfig: {
       speed: 78,        // px/giây
@@ -1269,7 +1464,6 @@ const CHIBI_GALLERY = [
     code: "2", name: "Yuki", desc: "Cô bé mũ len ấm áp",
     rarity: "Hiếm", element: "nature",
     frontImage: "chibi/2/chinhdien.png",
-    unlocked: true,
     frameCount: 34, // chibi này có 13 khung ảnh chạy (chibi 1 có 10), khác chibi_characters.frame_count trong DB
     // Giữ nguyên tên file gốc bạn upload (frame_001.png .. frame_013.png), không đổi tên thành 1.png..13.png
     frameFileName: (i) => `frame_${String(i).padStart(3, "0")}.png`,
@@ -1285,9 +1479,41 @@ const CHIBI_GALLERY = [
   {
     code: "3", name: "???", desc: "",
     rarity: "Thường", element: null,
-    frontImage: "", unlocked: false,
+    frontImage: "",
   },
 ];
+
+// Chibi mặc định ai cũng có ngay khi đăng ký (khớp chibi_characters.is_default = 1 trong DB): Eruka.
+// Các chibi còn lại phải được mở khoá (có dòng trong bảng user_chibis).
+const DEFAULT_CHIBI_CODE = "1";
+
+// Trước khi server trả lời thì tạm coi như chỉ có Eruka được mở khoá; sau đó dùng đúng dữ liệu server.
+function isChibiUnlocked(code){
+  return s.chibisLoaded ? s.unlockedChibiCodes.has(code) : code === DEFAULT_CHIBI_CODE;
+}
+
+async function fetchChibis(){
+  if (!s.token) return;
+  try {
+    const res = await authFetch(`${API_URL}/chibis`);
+    if (!res.ok) return;
+    const data = await res.json();
+    s.unlockedChibiCodes = new Set((data.chibis || []).filter(c => c.unlocked).map(c => c.code));
+    s.chibisLoaded = true;
+    s.chibiPrices = {};
+    (data.chibis || []).forEach(c => { s.chibiPrices[c.code] = Number(c.price) || 0; });
+    if (data.gold !== undefined) s.gold = Number(data.gold) || 0;
+    // Chibi chưa mở khoá thì không được phép chạy trên màn hình.
+    let changed = false;
+    for (const code of Array.from(s.activeChibiCodes)) {
+      if (!s.unlockedChibiCodes.has(code)) { s.activeChibiCodes.delete(code); changed = true; }
+    }
+    if (changed) { applyChibiRunnerState(); saveSession(); }
+    if (s.view === "chibi" || s.view === "shop") render();
+  } catch (err) {
+    console.error("Lỗi lấy danh sách chibi:", err);
+  }
+}
 
 function toggleChibiFavorite(code){
   if (s.chibiFavorites.has(code)) s.chibiFavorites.delete(code);
@@ -1306,6 +1532,7 @@ function setChibiFilter(f){
 // sau tự chạy lại đúng các chibi này.
 async function useChibi(code){
   if (!s.token) { alert("Vui lòng đăng nhập để sử dụng chibi"); return; }
+  if (!isChibiUnlocked(code)) { alert("Chibi này chưa được mở khoá"); return; }
 
   const wasActive = s.activeChibiCodes.has(code);
   const willBeActive = !wasActive;
@@ -1353,7 +1580,7 @@ function updateChibiUseBtn(code){
 
 function filteredChibiList(){
   const { chibiFilter } = s;
-  if (chibiFilter === "owned") return CHIBI_GALLERY.filter(c => c.unlocked);
+  if (chibiFilter === "owned") return CHIBI_GALLERY.filter(c => isChibiUnlocked(c.code));
   if (chibiFilter === "favorite") return CHIBI_GALLERY.filter(c => s.chibiFavorites.has(c.code));
   if (CHIBI_RARITIES.includes(chibiFilter)) return CHIBI_GALLERY.filter(c => c.rarity === chibiFilter);
   return CHIBI_GALLERY;
@@ -1377,7 +1604,16 @@ function chibiCard(c){
   const imgSrc = c.frontImage || fallback;
   const isActive = s.activeChibiCodes.has(c.code);
 
-  if (!c.unlocked) {
+  if (!isChibiUnlocked(c.code)) {
+    // Chibi đã có ảnh (vd Yuki): vẫn hiện ảnh + tên nhưng làm xám, phủ ổ khoá, không bấm "Sử dụng" được.
+    // Chibi chưa có ảnh (vd "???"): chỉ hiện ổ khoá như cũ.
+    const hasImage = !!c.frontImage;
+    const avatarHtml2 = hasImage
+      ? `<div class="chibi-card-avatar">
+          <img class="locked-img" src="${esc(imgSrc)}" alt="${esc(c.name)}" onerror="this.onerror=null;this.src='${esc(fallback)}'">
+        </div>
+        <span class="chibi-lock-badge" aria-hidden="true">🔒</span>`
+      : `<div class="chibi-card-avatar locked-avatar">🔒</div>`;
     return `<div class="chibi-card locked" style="--tint:${tint}">
       <div class="chibi-card-top">
         <span class="chibi-badge-rarity" style="color:${color};border-color:${color}66">${c.rarity}</span>
@@ -1385,10 +1621,10 @@ function chibiCard(c){
       </div>
       ${chibiStars(c.rarity)}
       <div class="chibi-card-avatar-wrap">
-        <div class="chibi-card-avatar locked-avatar">🔒</div>
+        ${avatarHtml2}
       </div>
-      <div class="chibi-card-name muted">Chưa mở khoá</div>
-      <div class="chibi-card-desc">Săn thêm để mở khoá chibi này</div>
+      <div class="chibi-card-name${hasImage ? "" : " muted"}">${hasImage ? esc(c.name) : "Chưa mở khoá"}</div>
+      <div class="chibi-card-desc">${hasImage ? "🔒 Chưa mở khoá" : "Săn thêm để mở khoá chibi này"}</div>
     </div>`;
   }
 
@@ -1417,6 +1653,82 @@ function chibiCard(c){
   </div>`;
 }
 
+// ================== CỬA HÀNG ==================
+// Chỉ bán những chibi CHƯA sở hữu và có giá > 0 (giá lấy từ server: chibi_characters.price).
+function shopItems(){
+  return CHIBI_GALLERY.filter(c => !isChibiUnlocked(c.code) && (s.chibiPrices[c.code] || 0) > 0 && c.frontImage);
+}
+
+function shopCard(c){
+  const price = s.chibiPrices[c.code] || 0;
+  const color = { "Huyền thoại":"#f59e0b", "Sử thi":"#a855f7", "Hiếm":"#38bdf8", "Thường":"#9ca3af" }[c.rarity] || "rgba(248,247,244,.4)";
+  const elem = c.element ? ELEMENT_TYPES[c.element] : null;
+  const tint = elem ? elem.color : "#8b5cf6";
+  const fallback = `chibi/${c.code}/${c.frameFileName ? c.frameFileName(1) : "1.png"}`;
+  const enough = s.gold >= price;
+  return `<div class="chibi-card" style="--tint:${tint}">
+    <div class="chibi-card-top">
+      <span class="chibi-badge-rarity" style="color:${color};border-color:${color}66">${c.rarity}</span>
+      <span></span>
+    </div>
+    ${chibiStars(c.rarity)}
+    <div class="chibi-card-avatar-wrap">
+      <div class="chibi-card-avatar">
+        <img src="${esc(c.frontImage)}" alt="${esc(c.name)}" onerror="this.onerror=null;this.src='${esc(fallback)}'">
+      </div>
+      ${elem ? `<span class="chibi-elem-badge" style="background:${elem.color}22;color:${elem.color}">${elem.icon}</span>` : ""}
+    </div>
+    <div class="chibi-card-name">${esc(c.name)}</div>
+    <div class="chibi-card-desc">${esc(c.desc)}</div>
+    <div class="shop-price${enough ? "" : " short"}">🪙 ${price}</div>
+    <button type="button" class="chibi-use-btn shop-buy-btn${enough ? "" : " short"}" ${s.shopBusy ? "disabled" : ""}
+      onclick="buyChibi('${c.code}')">${enough ? "Mua" : "Chưa đủ vàng"}</button>
+  </div>`;
+}
+
+function shopView(){
+  const items = shopItems();
+  let body;
+  if (!s.token) body = `<div class="quest-hint">Vui lòng đăng nhập để mua chibi.</div>`;
+  else if (!s.chibisLoaded) body = `<div class="quest-hint">Đang tải cửa hàng...</div>`;
+  else if (!items.length) body = `<div class="quest-hint">Bạn đã sở hữu tất cả chibi đang bán. Hãy quay lại sau nhé!</div>`;
+  else body = `<div class="chibi-grid">${items.map(shopCard).join("")}</div>`;
+  return `<div class="home fade">
+    <div class="gridbg fixed-grid"></div>
+    ${navBar()}
+    <main class="content">
+      <div class="section-title">Cửa hàng</div>
+      <div class="quest-hint">Số vàng của bạn: <b>🪙 ${Number(s.gold) || 0}</b> · Hoàn thành nhiệm vụ để nhận thêm vàng</div>
+      ${body}
+    </main>
+  </div>`;
+}
+
+async function buyChibi(code){
+  if (s.shopBusy) return;
+  const c = CHIBI_GALLERY.find(g => g.code === code);
+  const price = s.chibiPrices[code] || 0;
+  if (!c || price <= 0) return;
+  if (s.gold < price) { alert(`Chưa đủ vàng: cần ${price} vàng, bạn đang có ${s.gold}.`); return; }
+  if (!confirm(`Mua ${c.name} với giá ${price} vàng?`)) return;
+  s.shopBusy = true;
+  try {
+    const res = await authFetch(`${API_URL}/chibis/${encodeURIComponent(code)}/buy`, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || "Mua chibi thất bại");
+    s.gold = Number(data.gold) || 0;
+    s.unlockedChibiCodes.add(code);
+    alert(`Đã mua ${c.name}! Vào mục Chibi để sử dụng.`);
+  } catch (err) {
+    console.error("Lỗi mua chibi:", err);
+    alert(err.message || "Không thể mua chibi, vui lòng thử lại.");
+    fetchChibis();
+  } finally {
+    s.shopBusy = false;
+    if (s.view === "shop") render();
+  }
+}
+
 function chibiView(){
   const filters = [
     { key:"all",      label:"Tất cả" },
@@ -1429,75 +1741,13 @@ function chibiView(){
     ${navBar()}
     <main class="content">
       <div class="section-title">Bộ sưu tập Chibi</div>
+      <div class="quest-hint">Đã mở khoá ${CHIBI_GALLERY.filter(c => isChibiUnlocked(c.code)).length}/${CHIBI_GALLERY.length} chibi</div>
       <div class="chibi-filters">
         ${filters.map(f => `<button type="button" class="chibi-filter-btn${s.chibiFilter===f.key ? " active" : ""}" onclick="setChibiFilter('${f.key}')">${f.label}</button>`).join("")}
       </div>
       <div class="chibi-grid">
         ${filteredChibiList().map(chibiCard).join("")}
       </div>
-    </main>
-  </div>`;
-}
-
-// ================== NHIỆM VỤ ==================
-// Danh sách + tiến độ lấy từ server (/api/quests). Server đối chiếu chỉ số thật trong CSDL
-// và lưu lại nhiệm vụ đã hoàn thành, nên không thể tự báo "xong" từ trình duyệt.
-async function fetchQuests(){
-  if (!s.token) return;
-  s.questsLoading = true;
-  if (s.view === "quests") render();
-  try {
-    const res = await authFetch(`${API_URL}/quests`);
-    if (res.ok) s.quests = await res.json();
-  } catch (err) {
-    console.error("Lỗi lấy danh sách nhiệm vụ:", err);
-  } finally {
-    s.questsLoading = false;
-    if (s.view === "quests") render();
-  }
-}
-
-function formatQuestDate(iso){
-  try { return new Date(iso).toLocaleDateString("vi-VN"); } catch (e) { return ""; }
-}
-
-function questCard(q){
-  const pct = q.target ? Math.round(q.progress / q.target * 100) : 0;
-  return `<div class="quest-card${q.completed ? " done" : ""}">
-    <div class="quest-icon">${esc(q.icon)}</div>
-    <div class="quest-body">
-      <div class="quest-title">${esc(q.title)}</div>
-      <div class="quest-desc">${esc(q.description)}</div>
-      <div class="quest-bar"><span style="width:${pct}%"></span></div>
-      <div class="quest-meta">
-        <span>${q.progress.toLocaleString("vi-VN")} / ${q.target.toLocaleString("vi-VN")}</span>
-        ${q.completed ? `<span class="quest-done-tag">✓ Hoàn thành${q.completed_at ? " · " + formatQuestDate(q.completed_at) : ""}</span>` : `<span>${pct}%</span>`}
-      </div>
-    </div>
-  </div>`;
-}
-
-function questsView(){
-  let body;
-  if (!s.quests) {
-    body = `<div class="nav-search-empty" style="padding:3rem 1rem"><span class="nav-search-spin">◌</span> Đang tải nhiệm vụ...</div>`;
-  } else if (!s.quests.quests.length) {
-    body = `<div class="nav-search-empty" style="padding:3rem 1rem"><span class="nav-search-empty-icon">🎯</span>Chưa có nhiệm vụ nào. Hãy chạy file quests.sql trong SSMS nhé!</div>`;
-  } else {
-    const { completed_count, total } = s.quests;
-    const pct = total ? Math.round(completed_count / total * 100) : 0;
-    body = `<div class="quest-summary">
-        <div><b>${completed_count}</b> / ${total} nhiệm vụ đã hoàn thành</div>
-        <div class="quest-bar big"><span style="width:${pct}%"></span></div>
-      </div>
-      <div class="quest-grid">${s.quests.quests.map(questCard).join("")}</div>`;
-  }
-  return `<div class="home fade">
-    <div class="gridbg fixed-grid"></div>
-    ${navBar()}
-    <main class="content">
-      <div class="section-title">Nhiệm vụ</div>
-      ${body}
     </main>
   </div>`;
 }
@@ -1597,6 +1847,10 @@ let lastView = null; // theo dõi view trước đó để biết đây có ph�
 
 function render(){
   const app = document.getElementById("app");
+  // Đang ở trong màn chơi game (cờ vua/tetris) mà có render() "ngầm" từ các nơi khác
+  // (tải hội thoại, thông tin người chơi, tin nhắn realtime...) thì KHÔNG dựng lại:
+  // dựng lại sẽ unmount game -> đóng WebSocket -> đối thủ nhận "đã rời phòng".
+  if (s.view === "game" && lastView === "game" && document.getElementById("gameMount")) return;
   if (typeof TetrisGame !== "undefined") {
     TetrisGame.unmount();
   }
@@ -1619,9 +1873,11 @@ function render(){
   else if(s.view==="nickname") app.innerHTML = nicknameView();
   else if(s.view==="games")    app.innerHTML = gamesView();
   else if(s.view==="chibi")    app.innerHTML = chibiView();
+  else if(s.view==="shop")     app.innerHTML = shopView();
   else if(s.view==="friends")  app.innerHTML = friendsView();
   else if(s.view==="messages") app.innerHTML = messagesView();
   else if(s.view==="quests")   app.innerHTML = questsView();
+  else if(s.view==="history")  app.innerHTML = historyView();
   else if(s.view==="game"){
     app.innerHTML = gameView();
     s.gameSessionToken = ""; // reset, token cũ (nếu có) đã dùng xong hoặc không còn hợp lệ
@@ -1655,6 +1911,7 @@ function go(view, gameId){
   if(view==="login") s.regOk = false;
   if(gameId) s.selectedGame = gameId;
   s.view = view;
+  s.notifOpen = false;
   if(view === "home") {
     fetchLeaderboard();
     fetchUserStats();
@@ -1662,11 +1919,17 @@ function go(view, gameId){
   if(view === "friends") {
     fetchFriends();
   }
+  if(view === "messages") {
+    fetchConversations();
+  }
   if(view === "quests") {
     fetchQuests();
   }
-  if(view === "messages") {
-    fetchConversations();
+  if(view === "history") {
+    fetchGameHistory();
+  }
+  if(view === "chibi" || view === "shop") {
+    fetchChibis();
   }
   render();
   saveSession();
@@ -1705,6 +1968,7 @@ async function doLogin(e){
       // Chưa từng chọn -> active_chibi_codes rỗng -> không chạy chibi nào cả.
       s.activeChibiCodes = new Set(data.active_chibi_codes || []);
       applyChibiRunnerState();
+      fetchChibis(); // lấy trạng thái khoá/mở khoá chibi của tài khoản này
       if (data.nickname && data.nickname.trim() !== "") {
         s.nick = data.nickname;
         s.view = "games";
@@ -1714,6 +1978,7 @@ async function doLogin(e){
         fetchFriends();
         fetchConversations();
         connectMessagesWS();
+        startNotifPolling();
       } else {
         s.nick = username;
         s.view = "nickname";
@@ -1796,6 +2061,7 @@ async function doNick(e){
   fetchFriends();
   fetchConversations();
   connectMessagesWS();
+  startNotifPolling();
   render();
 }
 
@@ -1876,6 +2142,187 @@ function setFilter(f){
   render();
 }
 
+// ================== THÔNG BÁO ==================
+// Thông báo do DATABASE tự tạo (hoàn thành nhiệm vụ, lời mời kết bạn, thành tích...).
+// Chuông ở thanh menu hiện số chưa đọc; frontend hỏi server mỗi 30 giây.
+// QUAN TRỌNG: cập nhật chuông bằng cách thay đúng khối #notifWrap, KHÔNG gọi render()
+// (render() dựng lại cả trang -> sẽ làm game đang chơi bị khởi động lại).
+
+const NOTIF_POLL_MS = 30000;
+let notifPollTimer = null;
+
+const NOTIF_ICONS = { quest: "🎯", achievement: "🏆", friend_request: "👥", system: "🔔" };
+
+function notifIcon(type){ return NOTIF_ICONS[type] || "🔔"; }
+
+function notifTimeAgo(iso){
+  const t = new Date(iso).getTime();
+  if (!iso || isNaN(t)) return "";
+  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (sec < 60) return "Vừa xong";
+  if (sec < 3600) return `${Math.floor(sec / 60)} phút trước`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)} giờ trước`;
+  if (sec < 86400 * 7) return `${Math.floor(sec / 86400)} ngày trước`;
+  return new Date(t).toLocaleDateString("vi-VN");
+}
+
+function notifBellHtml(){
+  const unread = s.notifUnread || 0;
+  const badge = unread ? `<span class="notif-badge">${unread > 99 ? "99+" : unread}</span>` : "";
+
+  let panel = "";
+  if (s.notifOpen) {
+    const items = s.notifications.map(n => `<div class="notif-item${n.is_read ? "" : " unread"}" onclick="onNotifClick(${Number(n.id)})">
+        <div class="notif-icon">${notifIcon(n.type)}</div>
+        <div class="notif-body">
+          <div class="notif-text">${esc(n.content)}</div>
+          <div class="notif-time">${esc(notifTimeAgo(n.created_at))}</div>
+        </div>
+        ${n.is_read ? "" : `<span class="notif-dot"></span>`}
+      </div>`).join("");
+    const empty = `<div class="notif-empty">${s.notifLoaded ? "📭 Chưa có thông báo nào" : "⏳ Đang tải..."}</div>`;
+    panel = `<div class="notif-panel">
+        <div class="notif-head">
+          <span>Thông báo</span>
+          <button type="button" class="notif-readall" onclick="markAllNotifRead()" ${unread ? "" : "disabled"}>Đánh dấu đã đọc tất cả</button>
+        </div>
+        <div class="notif-list">${items || empty}</div>
+      </div>`;
+  }
+
+  return `<div class="notif-wrap" id="notifWrap">
+      <button type="button" class="notif-bell${s.notifOpen ? " open" : ""}" onclick="toggleNotifPanel()" title="Thông báo" aria-label="Thông báo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path>
+          <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+        </svg>
+        ${badge}
+      </button>
+      ${panel}
+    </div>`;
+}
+
+// Chỉ thay khối chuông (không render lại cả trang).
+function refreshNotifUI(){
+  const wrap = document.getElementById("notifWrap");
+  if (wrap) wrap.outerHTML = notifBellHtml();
+}
+
+function toggleNotifPanel(){
+  s.notifOpen = !s.notifOpen;
+  refreshNotifUI();
+  if (s.notifOpen) fetchNotifications();
+}
+
+async function fetchNotifications(fromQuests){
+  if (!s.token) return;
+  try {
+    const res = await authFetch(`${API_URL}/notifications?limit=30`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const list = data.notifications || [];
+    const maxId = list.reduce((m, n) => Math.max(m, n.id), 0);
+
+    // Lần tải đầu tiên chỉ ghi nhớ mốc, không bật toast cho thông báo cũ.
+    const prevLastId = s.notifLastId;
+    s.notifLastId = Math.max(prevLastId || 0, maxId);
+    s.notifications = list;
+    s.notifUnread = data.unread || 0;
+    s.notifLoaded = true;
+    refreshNotifUI();
+
+    if (prevLastId !== null) {
+      const fresh = list.filter(n => n.id > prevLastId && !n.is_read).reverse().slice(-3);
+      fresh.forEach(showNotifToast);
+      // Đang ở trang Nhiệm vụ mà có nhiệm vụ mới hoàn thành -> làm mới danh sách.
+      if (!fromQuests && s.view === "quests" && fresh.some(n => n.type === "quest")) fetchQuests();
+    }
+  } catch (err) {
+    console.error("Lỗi lấy thông báo:", err);
+  }
+}
+
+async function pollNotifications(){
+  if (!s.token || document.hidden) return;
+  try {
+    const res = await authFetch(`${API_URL}/notifications/unread-count`);
+    if (!res.ok) return;
+    const data = await res.json();
+    // Số chưa đọc đổi (có thông báo mới, hoặc đã đọc ở tab khác) / panel đang mở -> tải lại danh sách.
+    if ((data.unread || 0) !== s.notifUnread || s.notifOpen) await fetchNotifications();
+  } catch (err) { /* mất mạng: bỏ qua, lần sau thử lại */ }
+}
+
+function startNotifPolling(){
+  if (!s.token) return;
+  if (notifPollTimer) return;
+  fetchNotifications();
+  notifPollTimer = setInterval(pollNotifications, NOTIF_POLL_MS);
+}
+
+function stopNotifPolling(){
+  if (notifPollTimer) { clearInterval(notifPollTimer); notifPollTimer = null; }
+  s.notifications = [];
+  s.notifUnread = 0;
+  s.notifOpen = false;
+  s.notifLoaded = false;
+  s.notifLastId = null;
+}
+
+async function markNotifReadOnServer(id){
+  try {
+    await authFetch(`${API_URL}/notifications/${id}/read`, { method: "POST" });
+  } catch (err) { console.error("Lỗi đánh dấu đã đọc:", err); }
+}
+
+function onNotifClick(id){
+  const n = s.notifications.find(x => x.id === id);
+  if (!n) return;
+  if (!n.is_read) {
+    n.is_read = true;
+    s.notifUnread = Math.max(0, s.notifUnread - 1);
+    markNotifReadOnServer(id);
+  }
+  s.notifOpen = false;
+  if (n.type === "quest") go("quests");
+  else if (n.type === "friend_request") go("friends");
+  else refreshNotifUI();
+}
+
+async function markAllNotifRead(){
+  s.notifications.forEach(n => { n.is_read = true; });
+  s.notifUnread = 0;
+  refreshNotifUI();
+  try {
+    await authFetch(`${API_URL}/notifications/read-all`, { method: "POST" });
+  } catch (err) { console.error("Lỗi đánh dấu đã đọc tất cả:", err); }
+}
+
+// Toast nổi góc phải màn hình; gắn vào <body> (ngoài #app) nên không bị render() xóa mất.
+function showNotifToast(n){
+  let box = document.getElementById("notifToastBox");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "notifToastBox";
+    box.className = "notif-toast-box";
+    document.body.appendChild(box);
+  }
+  const el = document.createElement("div");
+  el.className = "notif-toast";
+  el.innerHTML = `<span class="notif-toast-icon">${notifIcon(n.type)}</span><span class="notif-toast-text">${esc(n.content)}</span>`;
+  el.onclick = () => { el.remove(); onNotifClick(n.id); };
+  box.appendChild(el);
+  setTimeout(() => { el.classList.add("hide"); setTimeout(() => el.remove(), 400); }, 6000);
+}
+
+// Bấm ra ngoài khối chuông -> đóng panel.
+document.addEventListener("click", (e) => {
+  if (s.notifOpen && !(e.target.closest && e.target.closest(".notif-wrap"))) {
+    s.notifOpen = false;
+    refreshNotifUI();
+  }
+});
+
 // ================== TÌM KIẾM NGƯỜI CHƠI (thanh menu) ==================
 
 // Thanh menu dùng chung cho các trang home / games / game, có kèm ô tìm kiếm.
@@ -1888,47 +2335,42 @@ function navBar(){
       <div class="navlinks">
         <span class="${s.view==='home'?'active':''}" onclick="go('home')" style="cursor:pointer">Hồ sơ</span>
         <span class="${gamesActive?'active':''}" onclick="go('games')" style="cursor:pointer">Chơi ngay</span>
-        <span class="nav-mobile-only ${s.view==='quests'?'active':''}" onclick="go('quests')" style="cursor:pointer">Nhiệm vụ</span>
-        <span class="nav-mobile-only ${s.view==='chibi'?'active':''}" onclick="go('chibi')" style="cursor:pointer">Chibi</span>
-        <span class="nav-mobile-only ${s.view==='friends'?'active':''}" onclick="go('friends')" style="cursor:pointer;position:relative">
-          Bạn bè${s.friendsIncoming.length ? `<span class="nav-badge">${s.friendsIncoming.length}</span>` : ""}
-        </span>
-        <span class="nav-mobile-only ${s.view==='messages'?'active':''}" onclick="go('messages')" style="cursor:pointer;position:relative">
-          Tin nhắn${totalUnreadMessages() ? `<span class="nav-badge">${totalUnreadMessages()}</span>` : ""}
-        </span>
-        <span>Cửa hàng</span>
+        <span class="${s.view==='shop'?'active':''}" onclick="go('shop')" style="cursor:pointer">Cửa hàng</span>
       </div>
       ${searchBox()}
       <div class="navuser">
+        <span class="nav-gold" title="Số vàng của bạn" onclick="go('shop')">🪙 ${Number(s.gold) || 0}</span>
+        ${notifBellHtml()}
         <div class="navuser-profile" onclick="go('home')" style="display:flex;align-items:center;gap:.5rem;cursor:pointer" title="Xem hồ sơ">
           <div class="avatar">${avatarHtml(s.avatar, ini)}</div>
           <span style="font-size:14.5px;font-weight:500">${esc(displayName)}</span>
         </div>
         <button class="logout" onclick="logout()">Đăng xuất</button>
       </div>
-    </nav>${sideDockHtml()}`;
+    </nav>
+    ${sideBar()}`;
 }
 
-// ================== MENU BÊN TRÁI: Chibi · Bạn bè · Tin nhắn ==================
-// Chỉ là 3 nút điều hướng xếp dọc ở mép trái (gọn hơn thanh trên). Bấm vào vẫn mở đúng
-// các trang Chibi / Bạn bè / Tin nhắn như cũ; số đỏ = lời mời kết bạn / tin chưa đọc.
-function sideDockHtml(){
-  const item = (view, icon, label, count) => `<button type="button" class="dock-item${s.view === view ? " active" : ""}" onclick="go('${view}')" title="${label}">
-      <span class="dock-item-icon">${icon}${count ? `<span class="dock-badge">${count}</span>` : ""}</span>
-      <span class="dock-item-label">${label}</span>
-    </button>`;
-  return `<aside class="side-dock" id="sideDock"><div class="dock-inner">
-    ${item("quests", "🎯", "Nhiệm vụ", 0)}
-    ${item("chibi", "🐾", "Chibi", 0)}
-    ${item("friends", "👥", "Bạn bè", s.friendsIncoming.length)}
-    ${item("messages", "💬", "Tin nhắn", totalUnreadMessages())}
-  </div></aside>`;
-}
-
-// Vẽ lại riêng menu trái (để cập nhật số đỏ) mà không render() cả trang.
-function refreshDock(){
-  const old = document.getElementById("sideDock");
-  if (old) old.outerHTML = sideDockHtml();
+// Thanh bên trái: Chibi, Bạn bè, Tin nhắn, Nhiệm vụ (position:fixed nên không ảnh hưởng bố cục từng trang).
+function sideBar(){
+  const ic = (d) => `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const items = [
+    { view: "chibi",    label: "Chibi",    badge: 0,
+      icon: ic('<circle cx="12" cy="12" r="9"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line>') },
+    { view: "friends",  label: "Bạn bè",   badge: s.friendsIncoming.length,
+      icon: ic('<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path>') },
+    { view: "messages", label: "Tin nhắn", badge: totalUnreadMessages(),
+      icon: ic('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>') },
+    { view: "history",  label: "Lịch sử",  badge: 0,
+      icon: ic('<circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline>') },
+    { view: "quests",   label: "Nhiệm vụ", badge: 0,
+      icon: ic('<circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle>') }
+  ];
+  return `<aside class="sidebar">${items.map(i => `<div class="side-item${s.view === i.view ? " active" : ""}" onclick="go('${i.view}')" title="${i.label}">
+      <span class="side-icon">${i.icon}</span>
+      <span class="side-label">${i.label}</span>
+      ${i.badge ? `<span class="side-badge">${i.badge}</span>` : ""}
+    </div>`).join("")}</aside>`;
 }
 
 function searchBox(){
