@@ -1,13 +1,35 @@
 const API_URL = window.APP_CONFIG ? window.APP_CONFIG.API_URL : "https://maintenance-roman-silly-morning.trycloudflare.com/api";
 
-const achievements = [
-  {icon:"⚔️", label:"Chiến binh", desc:"Thắng 10 trận liên tiếp", earned:true,  rarity:"Huyền thoại"},
-  {icon:"🏆", label:"Vô địch",    desc:"Top 1 bảng xếp hạng",    earned:true,  rarity:"Hiếm"},
-  {icon:"🎯", label:"Bắn tỉa",   desc:"Chính xác 95% cú đánh",  earned:true,  rarity:"Thường"},
-  {icon:"🔥", label:"Bất diệt",  desc:"Không thua 30 ngày",      earned:false, rarity:"Siêu hiếm"},
-  {icon:"💎", label:"Kim cương", desc:"Đạt rank Kim Cương",      earned:false, rarity:"Huyền thoại"},
-  {icon:"⚡", label:"Sấm sét",   desc:"Kết thúc trận trong 3 phút", earned:true, rarity:"Hiếm"},
+// Danh mục huy hiệu (phần hiển thị). Việc ai đã đạt huy hiệu nào do BACKEND tính từ dữ liệu thật
+// (hàm compute_badges trong backend.py) và trả về dưới dạng danh sách mã `badges`.
+const BADGE_CATALOG = [
+  {code:"rookie",       icon:"🎮", label:"Tân binh",           desc:"Chơi ván đầu tiên",                 rarity:"Thường"},
+  {code:"tetris_500",   icon:"🧱", label:"Thợ xếp hình",       desc:"Đạt 500 điểm Tetris",               rarity:"Thường"},
+  {code:"snake_300",    icon:"🐍", label:"Thợ săn rắn",        desc:"Đạt 300 điểm Rắn săn mồi",          rarity:"Thường"},
+  {code:"chess_win",    icon:"♟️", label:"Nước cờ đầu",        desc:"Thắng 1 ván cờ vua",                rarity:"Thường"},
+  {code:"friends_3",    icon:"🤝", label:"Hòa đồng",           desc:"Có 3 người bạn",                    rarity:"Hiếm"},
+  {code:"chibi_3",      icon:"🐣", label:"Nhà sưu tầm",        desc:"Sở hữu 3 chibi",                    rarity:"Hiếm"},
+  {code:"diamond",      icon:"💎", label:"Kim cương",          desc:"Đạt rank Kim Cương",                rarity:"Siêu hiếm"},
+  {code:"top3",         icon:"👑", label:"Tinh hoa",           desc:"Lọt top 3 bảng xếp hạng",           rarity:"Siêu hiếm"},
+  {code:"quest_master", icon:"🏆", label:"Nhà thám hiểm",      desc:"Hoàn thành tất cả nhiệm vụ",        rarity:"Huyền thoại"},
 ];
+
+// Gắn cờ earned cho từng huy hiệu theo danh sách mã server trả về.
+function badgesFor(codes){
+  const got = new Set(codes || []);
+  return BADGE_CATALOG.map(b => ({ ...b, earned: got.has(b.code) }));
+}
+
+function badgeCardHtml(a){
+  return `
+    <div class="achievement${a.earned ? "" : " locked"}">
+      ${a.earned ? "" : `<span class="achv-lock" aria-hidden="true">🔒</span>`}
+      <div class="icon">${a.icon}</div>
+      <strong>${a.label}</strong>
+      <p>${a.desc}</p>
+      <span class="rarity" style="color:${rarityColor[a.rarity]}">${a.rarity}</span>
+    </div>`;
+}
 
 let dbLeaderboard = [];
 
@@ -84,6 +106,7 @@ let s = {
   userMatches : 0,
   userHighScore: 0,
   userSnakeScore: 0,
+  badges: [],           // mã huy hiệu đã đạt (server tính)
   showLogin   : false,
   regPass     : "",
   showReg     : false,
@@ -197,6 +220,7 @@ function logout(){
   s.userMatches = 0;
   s.userHighScore = 0;
   s.userSnakeScore = 0;
+  s.badges = [];
   dbLeaderboard = [];
   s.friends = [];
   s.friendsIncoming = [];
@@ -246,6 +270,7 @@ async function restoreSession(){
     s.userMatches = data.total_matches;
     s.userHighScore = data.high_score || 0;
     s.userSnakeScore = data.snake_score || 0;
+    s.badges = data.badges || [];
     if (data.avatar) s.avatar = data.avatar;
     s.activeChibiCodes = new Set(data.active_chibi_codes || []);
     applyChibiRunnerState(); // đồng bộ lại theo dữ liệu thật từ server (phòng khi đổi từ máy khác)
@@ -303,6 +328,7 @@ async function fetchUserStats() {
       s.userMatches = data.total_matches;
       s.userHighScore = data.high_score || 0;
       s.userSnakeScore = data.snake_score || 0;
+      s.badges = data.badges || [];
       s.userPublicId = data.public_id || "--------";
       if (data.avatar) s.avatar = data.avatar;
       if (data.active_chibi_codes !== undefined) {
@@ -1335,7 +1361,8 @@ function homeView(){
   const displayName = s.nick || s.username || "GameThủ";
   const ini = displayName.slice(0, 2).toUpperCase();
   const myTier = getRankTier(s.userHighScore);
-  const list = s.filter === "earned" ? achievements.filter(a => a.earned) : achievements;
+  const allBadges = badgesFor(s.badges);
+  const list = s.filter === "earned" ? allBadges.filter(a => a.earned) : allBadges;
   
   let lbRows = "";
   if (dbLeaderboard.length === 0) {
@@ -1363,13 +1390,7 @@ function homeView(){
     }).join("");
   }
 
-  const achCards = list.map(a => `
-    <div class="achievement${a.earned ? "" : " locked"}">
-      <div class="icon">${a.icon}</div>
-      <strong>${a.label}</strong>
-      <p>${a.desc}</p>
-      <span class="rarity" style="color:${rarityColor[a.rarity]}">${a.rarity}</span>
-    </div>`).join("");
+  const achCards = list.map(badgeCardHtml).join("");
 
   return `<div class="home fade">
     <div class="gridbg fixed-grid"></div>
@@ -2674,13 +2695,7 @@ function profileModalHtml({ loading, error, data } = {}){
     const name = data.display_name || "Ẩn danh";
     const ini = name.slice(0, 2).toUpperCase();
     const tier = getRankTier(data.high_score);
-    const achCards = achievements.map(a => `
-      <div class="achievement${a.earned ? "" : " locked"}">
-        <div class="icon">${a.icon}</div>
-        <strong>${a.label}</strong>
-        <p>${a.desc}</p>
-        <span class="rarity" style="color:${rarityColor[a.rarity]}">${a.rarity}</span>
-      </div>`).join("");
+    const achCards = badgesFor(data.badges).map(badgeCardHtml).join("");
 
     body = `
       <section class="profile profile-modal-section">
