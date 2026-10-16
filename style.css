@@ -745,6 +745,14 @@ label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.12
 .quest-row.done .quest-index{color:#34d399;background:rgba(52,211,153,.14);border-color:rgba(52,211,153,.4)}
 .quest-row.done .quest-title{text-decoration:line-through;opacity:.65}
 .quest-status-pending{color:rgba(255,255,255,.45)}
+.quest-actions{display:flex;align-items:center;gap:.7rem;flex-shrink:0}
+.quest-reward{font-size:12px;font-weight:600;color:#facc15;white-space:nowrap}
+.quest-claimed{color:rgba(255,255,255,.5)}
+.quest-row.claimable{background:rgba(250,204,21,.05)}
+.quest-row.done.claimable .quest-title{text-decoration:none;opacity:1}
+.quest-claim-btn{font-family:inherit;font-size:13px;font-weight:700;color:#1a1405;background:linear-gradient(135deg,#fde68a,#facc15);border:0;border-radius:999px;padding:.4rem .95rem;cursor:pointer;white-space:nowrap;box-shadow:0 0 14px rgba(250,204,21,.35);transition:transform .12s,box-shadow .12s}
+.quest-claim-btn:hover{transform:translateY(-1px);box-shadow:0 0 20px rgba(250,204,21,.55)}
+.quest-claim-btn:active{transform:translateY(0)}
 .quest-hint{font-size:13px;color:rgba(255,255,255,.55);margin:.25rem 0 .6rem}
 
 /* ================== THÔNG BÁO (chuông + panel + toast) ================== */
