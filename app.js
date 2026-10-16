@@ -106,6 +106,7 @@ let s = {
   notifUnread    : 0,
   notifOpen      : false,
   notifLoaded    : false,
+  notifSeen      : new Set(),   // id thông báo vừa được 'xem' khi mở chuông (vẫn tô sáng trong panel, nhưng không tính vào số trên chuông)
   notifLastId    : null,
   conversations       : [],
   conversationsLoaded : false,
@@ -2232,24 +2233,25 @@ function notifTimeAgo(iso){
 }
 
 function notifBellHtml(){
+  if (!s.notifOpen && s.notifSeen.size) s.notifSeen.clear(); // đóng panel -> hết tô sáng
   const unread = s.notifUnread || 0;
   const badge = unread ? `<span class="notif-badge">${unread > 99 ? "99+" : unread}</span>` : "";
 
   let panel = "";
   if (s.notifOpen) {
-    const items = s.notifications.map(n => `<div class="notif-item${n.is_read ? "" : " unread"}" onclick="onNotifClick(${Number(n.id)})">
+    const isNew = (n) => !n.is_read || s.notifSeen.has(n.id);
+    const items = s.notifications.map(n => `<div class="notif-item${isNew(n) ? " unread" : ""}" onclick="onNotifClick(${Number(n.id)})">
         <div class="notif-icon">${notifIcon(n.type)}</div>
         <div class="notif-body">
           <div class="notif-text">${esc(n.content)}</div>
           <div class="notif-time">${esc(notifTimeAgo(n.created_at))}</div>
         </div>
-        ${n.is_read ? "" : `<span class="notif-dot"></span>`}
+        ${isNew(n) ? `<span class="notif-dot"></span>` : ""}
       </div>`).join("");
     const empty = `<div class="notif-empty">${s.notifLoaded ? "📭 Chưa có thông báo nào" : "⏳ Đang tải..."}</div>`;
     panel = `<div class="notif-panel">
         <div class="notif-head">
           <span>Thông báo</span>
-          <button type="button" class="notif-readall" onclick="markAllNotifRead()" ${unread ? "" : "disabled"}>Đánh dấu đã đọc tất cả</button>
         </div>
         <div class="notif-list">${items || empty}</div>
       </div>`;
@@ -2273,10 +2275,25 @@ function refreshNotifUI(){
   if (wrap) wrap.outerHTML = notifBellHtml();
 }
 
-function toggleNotifPanel(){
+// Mở chuông = đã xem: số đỏ trên chuông về 0 (server cũng đánh dấu đã đọc). Thông báo mới đến sau đó
+// lại hiện số mới. Trong panel, các thông báo vừa xem vẫn được tô sáng cho tới khi đóng panel.
+function markNotifsSeen(){
+  let any = false;
+  s.notifications.forEach(n => {
+    if (!n.is_read) { s.notifSeen.add(n.id); n.is_read = true; any = true; }
+  });
+  if (any || s.notifUnread) {
+    s.notifUnread = 0;
+    authFetch(`${API_URL}/notifications/read-all`, { method: "POST" })
+      .catch(err => console.error("Lỗi đánh dấu đã đọc:", err));
+  }
+}
+
+async function toggleNotifPanel(){
   s.notifOpen = !s.notifOpen;
+  if (s.notifOpen) markNotifsSeen();
   refreshNotifUI();
-  if (s.notifOpen) fetchNotifications();
+  if (s.notifOpen) await fetchNotifications();
 }
 
 async function fetchNotifications(fromQuests){
@@ -2291,13 +2308,16 @@ async function fetchNotifications(fromQuests){
     // Lần tải đầu tiên chỉ ghi nhớ mốc, không bật toast cho thông báo cũ.
     const prevLastId = s.notifLastId;
     s.notifLastId = Math.max(prevLastId || 0, maxId);
+    const fresh = prevLastId !== null
+      ? list.filter(n => n.id > prevLastId && !n.is_read).reverse().slice(-3)
+      : [];
     s.notifications = list;
     s.notifUnread = data.unread || 0;
     s.notifLoaded = true;
+    if (s.notifOpen) markNotifsSeen(); // đang mở chuông mà có thông báo mới -> coi như đã xem luôn
     refreshNotifUI();
 
     if (prevLastId !== null) {
-      const fresh = list.filter(n => n.id > prevLastId && !n.is_read).reverse().slice(-3);
       fresh.forEach(showNotifToast);
       // Đang ở trang Nhiệm vụ mà có nhiệm vụ mới hoàn thành -> làm mới danh sách.
       if (!fromQuests && s.view === "quests" && fresh.some(n => n.type === "quest")) fetchQuests();
