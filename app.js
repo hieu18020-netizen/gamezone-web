@@ -83,6 +83,7 @@ let s = {
   userRank    : "#-",
   userMatches : 0,
   userHighScore: 0,
+  userSnakeScore: 0,
   showLogin   : false,
   regPass     : "",
   showReg     : false,
@@ -193,6 +194,7 @@ function logout(){
   s.userRank = "#-";
   s.userMatches = 0;
   s.userHighScore = 0;
+  s.userSnakeScore = 0;
   dbLeaderboard = [];
   s.friends = [];
   s.friendsIncoming = [];
@@ -241,6 +243,7 @@ async function restoreSession(){
     s.userRank = data.rank;
     s.userMatches = data.total_matches;
     s.userHighScore = data.high_score || 0;
+    s.userSnakeScore = data.snake_score || 0;
     if (data.avatar) s.avatar = data.avatar;
     s.activeChibiCodes = new Set(data.active_chibi_codes || []);
     applyChibiRunnerState(); // đồng bộ lại theo dữ liệu thật từ server (phòng khi đổi từ máy khác)
@@ -297,6 +300,7 @@ async function fetchUserStats() {
       s.userRank = data.rank;
       s.userMatches = data.total_matches;
       s.userHighScore = data.high_score || 0;
+      s.userSnakeScore = data.snake_score || 0;
       s.userPublicId = data.public_id || "--------";
       if (data.avatar) s.avatar = data.avatar;
       if (data.active_chibi_codes !== undefined) {
@@ -555,9 +559,9 @@ function historyRowHtml(h){
   }
 
   const score = Number(h.score) || 0;
-  const isSnake = h.game_type === "snake";
   const dur = (h.duration_seconds !== null && h.duration_seconds !== undefined)
     ? ` · ${formatPlayDuration(h.duration_seconds)}` : "";
+  const isSnake = h.game_type === "snake";
   return `<div class="quest-row history-row">
     <div class="quest-index history-icon">${isSnake ? "🐍" : "🧱"}</div>
     <div class="quest-info">
@@ -578,13 +582,21 @@ function historyView(){
   const list = s.gameHistory.filter(h => s.historyFilter === "all" || h.game_type === s.historyFilter);
   const sm = s.gameHistorySummary;
 
+  const fmt = (v) => (Number(v) || 0).toLocaleString("vi-VN");
+  const gameCard = (cls, icon, name, recordLabel, record, games, footer) => `
+      <div class="history-game ${cls}">
+        <div class="history-game-head"><span class="history-game-icon">${icon}</span><span class="history-game-name">${name}</span></div>
+        <div class="history-game-stats">
+          <div class="history-game-stat"><div class="history-game-num">${record}</div><div class="history-game-label">${recordLabel}</div></div>
+          <div class="history-game-stat"><div class="history-game-num">${games}</div><div class="history-game-label">Số trận đã chơi</div></div>
+        </div>${footer ? `<div class="history-game-foot">${footer}</div>` : ""}
+      </div>`;
+
   const statsHtml = sm ? `<div class="history-summary">
-      <div class="history-stat"><div class="history-stat-num">${Number(sm.tetris_games) || 0}</div><div class="history-stat-label">Ván Tetris</div></div>
-      <div class="history-stat"><div class="history-stat-num">${(Number(sm.tetris_best) || 0).toLocaleString("vi-VN")}</div><div class="history-stat-label">Điểm Tetris cao nhất</div></div>
-      <div class="history-stat"><div class="history-stat-num">${Number(sm.snake_games) || 0}</div><div class="history-stat-label">Ván Rắn săn mồi</div></div>
-      <div class="history-stat"><div class="history-stat-num">${(Number(sm.snake_best) || 0).toLocaleString("vi-VN")}</div><div class="history-stat-label">Điểm Rắn cao nhất</div></div>
-      <div class="history-stat"><div class="history-stat-num">${Number(sm.chess_games) || 0}</div><div class="history-stat-label">Ván cờ vua</div></div>
-      <div class="history-stat"><div class="history-stat-num">${Number(sm.chess_wins) || 0}/${Number(sm.chess_losses) || 0}/${Number(sm.chess_draws) || 0}</div><div class="history-stat-label">Thắng / Thua / Hòa</div></div>
+      ${gameCard("hg-tetris", "🧱", "Tetris", "Kỷ lục", fmt(sm.tetris_best), fmt(sm.tetris_games))}
+      ${gameCard("hg-snake", "🐍", "Rắn săn mồi", "Kỷ lục", fmt(sm.snake_best), fmt(sm.snake_games))}
+      ${gameCard("hg-chess", "♟", "Cờ vua", "Số trận thắng", fmt(sm.chess_wins), fmt(sm.chess_games),
+        `Thua <b>${fmt(sm.chess_losses)}</b> · Hòa <b>${fmt(sm.chess_draws)}</b>`)}
     </div>` : "";
 
   const emptyHtml = `<div class="nav-search-empty" style="padding:2rem 1rem">
@@ -1806,7 +1818,8 @@ function gameView(){
 // để server có căn cứ kiểm tra điểm nộp lên sau này có hợp lý hay không.
 async function startGameSession(){
   try {
-    const res = await authFetch(`${API_URL}/start-game`, { method: "POST" });
+    const game = s.selectedGame === "snake" ? "snake" : "tetris";   // phiên chơi gắn với loại game
+    const res = await authFetch(`${API_URL}/start-game?game=${game}`, { method: "POST" });
     if (res.ok) {
       const data = await res.json();
       s.gameSessionToken = data.session_token || "";
@@ -1820,6 +1833,7 @@ async function startGameSession(){
 // Trả về {rank, highScore, totalMatches} nếu thành công, hoặc null nếu có lỗi.
 // KHÔNG tự chuyển trang ở đây nữa — để tetris.js quyết định hiển thị gì sau khi có kết quả.
 async function submitScore(finalScore){
+  const gameType = s.selectedGame === "snake" ? "snake" : "tetris";
   if (!s.gameSessionToken) {
     alert("Không xác định được phiên chơi, điểm chưa được lưu. Vui lòng chơi lại ván mới.");
     return null;
@@ -1828,7 +1842,7 @@ async function submitScore(finalScore){
     const res = await authFetch(`${API_URL}/update-score`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ score: finalScore, session_token: s.gameSessionToken, game: s.selectedGame === "snake" ? "snake" : "tetris" })
+      body: JSON.stringify({ score: finalScore, session_token: s.gameSessionToken, game_type: gameType })
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
@@ -1848,8 +1862,11 @@ async function submitScore(finalScore){
       s.userRank = data.rank;
       s.userMatches = data.total_matches;
       s.userHighScore = data.high_score || 0;
+      s.userSnakeScore = data.snake_score || 0;
       s.gameSessionToken = "";
-      return { rank: data.rank, highScore: data.high_score || 0, totalMatches: data.total_matches };
+      // Rắn săn mồi hiển thị KỶ LỤC riêng của rắn; Tetris giữ nguyên như cũ.
+      const best = gameType === "snake" ? (data.snake_score || 0) : (data.high_score || 0);
+      return { rank: data.rank, highScore: best, totalMatches: data.total_matches };
     }
   } catch (err) {
     console.error("Lỗi lấy thông tin xếp hạng:", err);
@@ -1912,7 +1929,7 @@ function render(){
     } else if (mountPoint && s.selectedGame === "snake" && typeof SnakeGame !== "undefined") {
       SnakeGame.mount(mountPoint, Object.assign({}, gameOpts, {
         onStart: startGameSession,      // chơi lại -> xin phiên chơi mới (token chỉ dùng được 1 lần)
-        highScore: s.userHighScore || 0
+        highScore: s.userSnakeScore || 0
       }));
     } else if (mountPoint && typeof TetrisGame !== "undefined") {
       TetrisGame.mount(mountPoint, gameOpts);
