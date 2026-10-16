@@ -1822,3 +1822,12 @@ class GameZoneAPI:
 
 
 app = GameZoneAPI().app
+
+
+# In ra file đang chạy + danh sách route để biết server có đúng bản này không (xem ở cửa sổ terminal).
+print("=" * 60)
+print("BACKEND ĐANG CHẠY TỪ FILE:", os.path.abspath(__file__))
+_paths = sorted({getattr(r, "path", "") for r in app.routes})
+for _need in ("/api/quests", "/api/chibis", "/api/notifications"):
+    print(f"  {_need:22s}", "CÓ" if _need in _paths else "THIẾU")
+print("=" * 60)
