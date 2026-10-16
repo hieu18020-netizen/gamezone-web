@@ -555,12 +555,13 @@ function historyRowHtml(h){
   }
 
   const score = Number(h.score) || 0;
+  const isSnake = h.game_type === "snake";
   const dur = (h.duration_seconds !== null && h.duration_seconds !== undefined)
     ? ` · ${formatPlayDuration(h.duration_seconds)}` : "";
   return `<div class="quest-row history-row">
-    <div class="quest-index history-icon">🧱</div>
+    <div class="quest-index history-icon">${isSnake ? "🐍" : "🧱"}</div>
     <div class="quest-info">
-      <div class="quest-title">Tetris</div>
+      <div class="quest-title">${isSnake ? "Rắn săn mồi" : "Tetris"}</div>
       <div class="quest-desc">${when}${dur}</div>
     </div>
     <span class="history-badge score">${score.toLocaleString("vi-VN")} điểm</span>
@@ -571,6 +572,7 @@ function historyView(){
   const filters = [
     { key: "all",    label: "Tất cả" },
     { key: "tetris", label: "🧱 Tetris" },
+    { key: "snake",  label: "🐍 Rắn săn mồi" },
     { key: "chess",  label: "♟ Cờ vua" },
   ];
   const list = s.gameHistory.filter(h => s.historyFilter === "all" || h.game_type === s.historyFilter);
@@ -579,6 +581,8 @@ function historyView(){
   const statsHtml = sm ? `<div class="history-summary">
       <div class="history-stat"><div class="history-stat-num">${Number(sm.tetris_games) || 0}</div><div class="history-stat-label">Ván Tetris</div></div>
       <div class="history-stat"><div class="history-stat-num">${(Number(sm.tetris_best) || 0).toLocaleString("vi-VN")}</div><div class="history-stat-label">Điểm Tetris cao nhất</div></div>
+      <div class="history-stat"><div class="history-stat-num">${Number(sm.snake_games) || 0}</div><div class="history-stat-label">Ván Rắn săn mồi</div></div>
+      <div class="history-stat"><div class="history-stat-num">${(Number(sm.snake_best) || 0).toLocaleString("vi-VN")}</div><div class="history-stat-label">Điểm Rắn cao nhất</div></div>
       <div class="history-stat"><div class="history-stat-num">${Number(sm.chess_games) || 0}</div><div class="history-stat-label">Ván cờ vua</div></div>
       <div class="history-stat"><div class="history-stat-num">${Number(sm.chess_wins) || 0}/${Number(sm.chess_losses) || 0}/${Number(sm.chess_draws) || 0}</div><div class="history-stat-label">Thắng / Thua / Hòa</div></div>
     </div>` : "";
@@ -1824,7 +1828,7 @@ async function submitScore(finalScore){
     const res = await authFetch(`${API_URL}/update-score`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ score: finalScore, session_token: s.gameSessionToken })
+      body: JSON.stringify({ score: finalScore, session_token: s.gameSessionToken, game: s.selectedGame === "snake" ? "snake" : "tetris" })
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
