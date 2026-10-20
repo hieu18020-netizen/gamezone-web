@@ -93,6 +93,10 @@ NO_PUBLIC_ID = "--------"
 # Tổng điểm xếp hạng = Tetris (high_score) + cờ vua (chess_score) + rắn săn mồi (snake_score)
 TOTAL_SCORE = "(ISNULL(high_score, 0) + ISNULL(chess_score, 0) + ISNULL(snake_score, 0))"
 TOTAL_SCORE_U = "(ISNULL(u.high_score, 0) + ISNULL(u.chess_score, 0) + ISNULL(u.snake_score, 0))"
+# Số trận đã chơi = số ván Tetris + Rắn săn mồi + Cờ vua, đếm từ game_history
+# (chính là 3 con số "số trận" của từng game ở màn Lịch sử cộng lại).
+TOTAL_MATCHES = "(SELECT COUNT(*) FROM game_history gh WHERE gh.user_id = users.id AND gh.game_type IN ('tetris', 'snake', 'chess'))"
+TOTAL_MATCHES_U = "(SELECT COUNT(*) FROM game_history gh WHERE gh.user_id = u.id AND gh.game_type IN ('tetris', 'snake', 'chess'))"
 def compute_badges(m, rank, config) -> list[str]:
     """Danh sách mã huy hiệu mà người chơi ĐÃ ĐẠT. Giao diện (app.js, BADGE_CATALOG) giữ phần tên/icon/mô tả."""
     earned = []
@@ -159,7 +163,7 @@ class UserRepository(BaseRepository):
         return self._one(
             f"""
             SELECT
-                ISNULL(u.total_matches, 0) AS total_matches,
+                {TOTAL_MATCHES_U} AS total_matches,
                 ISNULL(u.high_score, 0)    AS tetris_best,
                 ISNULL(u.snake_score, 0)   AS snake_best,
                 {TOTAL_SCORE_U}            AS total_score,
@@ -306,7 +310,7 @@ class UserRepository(BaseRepository):
 
     def get_stats(self, username):
         return self._one(
-            f"SELECT id, ISNULL(total_matches, 0) AS total_matches, {TOTAL_SCORE} AS score, "
+            f"SELECT id, {TOTAL_MATCHES} AS total_matches, {TOTAL_SCORE} AS score, "
             "ISNULL(snake_score, 0) AS snake_score, "
             "avatar, public_id, active_chibi_code FROM users WHERE username = ?",
             username,
@@ -346,7 +350,7 @@ class UserRepository(BaseRepository):
                     ISNULL(nickname, username) AS display_name,
                     {TOTAL_SCORE} AS score,
                     avatar, public_id,
-                    ISNULL(total_matches, 0) AS total_matches,
+                    {TOTAL_MATCHES} AS total_matches,
                     ROW_NUMBER() OVER (ORDER BY {TOTAL_SCORE} DESC, id ASC) AS rank_num
                 FROM users
             ) AS ranked_users
@@ -527,9 +531,9 @@ class QuestRepository(BaseRepository):
     def profile(self, username):
         """Các chỉ số THẬT của người chơi, đọc thẳng từ CSDL để đối chiếu với điều kiện nhiệm vụ."""
         return self._one(
-            """
+            f"""
             SELECT
-                ISNULL(u.total_matches, 0) AS total_matches,
+                {TOTAL_MATCHES_U} AS total_matches,
                 ISNULL(u.high_score, 0)    AS high_score,
                 ISNULL(u.chess_score, 0)   AS chess_score,
                 ISNULL(u.snake_score, 0)   AS snake_score,
