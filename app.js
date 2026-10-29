@@ -1308,6 +1308,9 @@ function homeView(){
   const ini = displayName.slice(0, 2).toUpperCase();
   const myTier = getRankTier(s.userHighScore);
   const allBadges = badgesFor(s.badges);
+  const earnedN = allBadges.filter(x => x.earned).length;
+  const totalN = allBadges.length;
+  const progPct = totalN ? Math.round(earnedN * 100 / totalN) : 0;
   const list = s.filter === "earned" ? allBadges.filter(a => a.earned) : allBadges;
   
   let lbRows = "";
@@ -1384,8 +1387,8 @@ function homeView(){
           </div>
           <div class="achievements">${achCards}</div>
           <div class="progress">
-            <div class="progress-head"><span>Tiến độ hoàn thành</span><b style="color:#8b5cf6">4/6</b></div>
-            <div class="bar"><i></i></div>
+            <div class="progress-head"><span>Tiến độ hoàn thành</span><b style="color:#8b5cf6">${earnedN}/${totalN} huy hiệu · ${progPct}%</b></div>
+            <div class="bar"><i style="width:${progPct}%"></i></div>
           </div>
         </section>
 
