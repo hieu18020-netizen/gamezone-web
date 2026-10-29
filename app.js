@@ -2022,7 +2022,11 @@ function render(){
   applyBuddyState();
 }
 
+const PUBLIC_VIEWS = ["login", "register", "nickname"]; // các trang không cần đăng nhập
+
 function go(view, gameId){
+  // Chưa đăng nhập mà vào trang cần tài khoản -> đưa về trang đăng nhập, không cho xem như khách.
+  if(!s.token && !PUBLIC_VIEWS.includes(view)) view = "login";
   if(view==="login") s.regOk = false;
   if(gameId) s.selectedGame = gameId;
   s.view = view;
