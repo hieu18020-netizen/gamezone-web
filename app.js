@@ -150,6 +150,7 @@ let s = {
   claimingQuest       : false,      // đang gửi yêu cầu nhận vàng nhiệm vụ (chặn bấm đúp)
   chibiPrices         : {},         // code chibi -> giá bán (vàng), 0 = không bán
   shopBusy            : false,      // đang gửi yêu cầu mua
+  shopFilter          : "all",      // bộ lọc cửa hàng: all | affordable | tên độ hiếm
   gameHistory         : [],
   gameHistorySummary  : null,
   gameHistoryLoaded   : false,
@@ -1022,7 +1023,7 @@ function pwField(id, placeholder, val, showKey, onInput){
   return `<div style="position:relative">
     <input class="input input-pw" id="${id}" type="${type}" placeholder="${placeholder}" value="${esc(val)}"
       oninput="${onInput}">
-    <button class="eye" type="button" onclick="toggle('${showKey}')">
+    <button class="eye" type="button" onmousedown="event.preventDefault()" onclick="toggle('${showKey}', this)">
       ${s[showKey]?"🙈":"👁"}
     </button>
   </div>`;
@@ -1180,62 +1181,7 @@ function loginView(){
     <main class="auth-right">
       ${cornerPets()}
       <div class="form fade">
-        <div class="pets-row">
-          <div class="pet-box">
-            <div class="pet-rig" data-pet="cat">
-              <div class="cat-orange">
-                <div class="c-eyes">
-                  <div class="c-eye"><div class="pupil"></div></div>
-                  <div class="c-eye"><div class="pupil"></div></div>
-                </div>
-              </div>
-              <div class="pet-neck neck-cat"></div>
-            </div>
-            <div class="pet-base"></div>
-          </div>
-          <div class="pet-box">
-            <div class="pet-rig" data-pet="dog">
-              <div class="dog-brown">
-                <div class="dog-ear-l"></div>
-                <div class="dog-ear-r"></div>
-                <div class="dog-hand"></div>
-                <div class="c-eyes" style="padding-top:12px">
-                  <div class="c-eye"><div class="pupil"></div></div>
-                  <div class="c-eye"><div class="pupil"></div></div>
-                </div>
-                <div class="dog-tongue"></div>
-              </div>
-              <div class="pet-neck neck-dog"></div>
-            </div>
-            <div class="pet-base"></div>
-          </div>
-          <div class="pet-box">
-            <div class="pet-rig" data-pet="owl">
-              <div class="owl-body">
-                <div class="owl-eyes">
-                  <div class="owl-eye"><div class="pupil" style="top:2px;left:2px"></div></div>
-                  <div class="owl-eye"><div class="pupil" style="top:2px;left:2px"></div></div>
-                </div>
-              </div>
-              <div class="pet-neck neck-owl"></div>
-            </div>
-            <div class="owl-branch"></div>
-          </div>
-          <div class="pet-box">
-            <div class="pet-rig" data-pet="rabbit">
-              <div class="rabbit-body">
-                <div class="r-ear-l"></div>
-                <div class="r-ear-r"></div>
-                <div class="r-eyes">
-                  <div class="r-eye"><div class="pupil r-pupil"></div></div>
-                  <div class="r-eye"><div class="pupil r-pupil"></div></div>
-                </div>
-              </div>
-              <div class="pet-neck neck-rabbit"></div>
-            </div>
-            <div class="pet-base"></div>
-          </div>
-        </div>
+        ${buddiesHtml()}
 
         <h2>Đăng nhập</h2>
         <p class="sub">Chưa có tài khoản? <button class="link" onclick="go('register')">Đăng ký miễn phí</button></p>
@@ -1740,48 +1686,101 @@ function shopItems(){
   return CHIBI_GALLERY.filter(c => !isChibiUnlocked(c.code) && (s.chibiPrices[c.code] || 0) > 0 && c.frontImage);
 }
 
+const SHOP_RARITY_COLOR = { "Huyền thoại":"#f59e0b", "Sử thi":"#a855f7", "Hiếm":"#38bdf8", "Thường":"#9ca3af" };
+const SH_ICON_BAG = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 7h12l1 13H5z"/><path d="M9 10V6a3 3 0 0 1 6 0v4"/></svg>`;
+
+function setShopFilter(f){
+  s.shopFilter = f;
+  render();
+}
+
 function shopCard(c){
   const price = s.chibiPrices[c.code] || 0;
-  const color = { "Huyền thoại":"#f59e0b", "Sử thi":"#a855f7", "Hiếm":"#38bdf8", "Thường":"#9ca3af" }[c.rarity] || "rgba(248,247,244,.4)";
+  const color = SHOP_RARITY_COLOR[c.rarity] || "rgba(248,247,244,.4)";
   const elem = c.element ? ELEMENT_TYPES[c.element] : null;
   const tint = elem ? elem.color : "#8b5cf6";
   const fallback = `chibi/${c.code}/${c.frameFileName ? c.frameFileName(1) : "1.png"}`;
-  const enough = s.gold >= price;
-  return `<div class="chibi-card" style="--tint:${tint}">
-    <div class="chibi-card-top">
-      <span class="chibi-badge-rarity" style="color:${color};border-color:${color}66">${c.rarity}</span>
-      <span></span>
+  const gold = Number(s.gold) || 0;
+  const enough = gold >= price;
+  const pct = Math.max(0, Math.min(100, Math.round(gold * 100 / price)));
+  return `<div class="sh-card" style="--tint:${tint};--rar:${color}">
+    <div class="sh-card-top">
+      <span class="sh-rar">${c.rarity}</span>
+      ${elem ? `<span class="sh-elem" style="color:${elem.color};border-color:${elem.color}55;background:${elem.color}14">${elem.icon} ${elem.label}</span>` : ""}
     </div>
     ${chibiStars(c.rarity)}
-    <div class="chibi-card-avatar-wrap">
-      <div class="chibi-card-avatar">
-        <img src="${esc(c.frontImage)}" alt="${esc(c.name)}" onerror="this.onerror=null;this.src='${esc(fallback)}'">
-      </div>
-      ${elem ? `<span class="chibi-elem-badge" style="background:${elem.color}22;color:${elem.color}">${elem.icon}</span>` : ""}
+    <div class="sh-avatar">
+      <img src="${esc(c.frontImage)}" alt="${esc(c.name)}" onerror="this.onerror=null;this.src='${esc(fallback)}'">
     </div>
-    <div class="chibi-card-name">${esc(c.name)}</div>
-    <div class="chibi-card-desc">${esc(c.desc)}</div>
-    <div class="shop-price${enough ? "" : " short"}">🪙 ${price}</div>
-    <button type="button" class="chibi-use-btn shop-buy-btn${enough ? "" : " short"}" ${s.shopBusy ? "disabled" : ""}
-      onclick="buyChibi('${c.code}')">${enough ? "Mua" : "Chưa đủ vàng"}</button>
+    <div class="sh-name">${esc(c.name)}</div>
+    <div class="sh-desc">${esc(c.desc)}</div>
+    <div class="sh-buy">
+      <div class="sh-price"><span>GIÁ</span><b>🪙 ${price.toLocaleString("vi-VN")}</b></div>
+      <button type="button" class="sh-btn${enough ? "" : " short"}" ${s.shopBusy ? "disabled" : ""}
+        onclick="buyChibi('${c.code}')">${enough ? "MUA NGAY <i>→</i>" : `THIẾU ${(price - gold).toLocaleString("vi-VN")} 🪙`}</button>
+    </div>
+    ${enough ? "" : `<div class="sh-progress" title="Bạn có ${gold} / ${price} vàng"><i style="width:${pct}%"></i></div>`}
   </div>`;
 }
 
 function shopView(){
   const items = shopItems();
+  const gold = Number(s.gold) || 0;
+  const priceOf = c => s.chibiPrices[c.code] || 0;
+  const ownedCount = CHIBI_GALLERY.filter(c => isChibiUnlocked(c.code)).length;
+
+  // Bộ lọc: Tất cả / Mua được / từng độ hiếm đang có trong cửa hàng
+  const rarities = ["Thường", "Hiếm", "Sử thi", "Huyền thoại"].filter(r => items.some(c => c.rarity === r));
+  const filters = [
+    { key: "all", label: "Tất cả", n: items.length },
+    { key: "affordable", label: "Mua được", n: items.filter(c => priceOf(c) <= gold).length },
+    ...rarities.map(r => ({ key: r, label: r, n: items.filter(c => c.rarity === r).length })),
+  ];
+  const active = filters.some(f => f.key === s.shopFilter) ? s.shopFilter : "all";
+  const shown = items.filter(c =>
+    active === "all" ? true : active === "affordable" ? priceOf(c) <= gold : c.rarity === active);
+
   let body;
-  if (!s.token) body = `<div class="quest-hint">Vui lòng đăng nhập để mua chibi.</div>`;
-  else if (s.chibisError) body = `<div class="quest-hint">⚠️ Không tải được cửa hàng. ${esc(s.chibisError)}</div>`;
-  else if (!s.chibisLoaded) body = `<div class="quest-hint">Đang tải cửa hàng...</div>`;
-  else if (!items.length) body = `<div class="quest-hint">Bạn đã sở hữu tất cả chibi đang bán. Hãy quay lại sau nhé!</div>`;
-  else body = `<div class="chibi-grid">${items.map(shopCard).join("")}</div>`;
+  if (!s.token) body = `<div class="sh-empty">Vui lòng đăng nhập để mua chibi.</div>`;
+  else if (s.chibisError) body = `<div class="sh-empty">⚠️ Không tải được cửa hàng. ${esc(s.chibisError)}</div>`;
+  else if (!s.chibisLoaded) body = `<div class="sh-empty">⏳ Đang tải cửa hàng...</div>`;
+  else if (!items.length) body = `<div class="sh-empty">🎉 Bạn đã sở hữu tất cả chibi đang bán. Hãy quay lại sau nhé!</div>`;
+  else if (!shown.length) body = `<div class="sh-empty">Không có chibi nào phù hợp bộ lọc này.</div>`;
+  else body = `<div class="sh-grid">${shown.map(shopCard).join("")}</div>`;
+
   return `<div class="home fade">
     <div class="gridbg fixed-grid"></div>
     ${navBar()}
-    <main class="content">
-      <div class="section-title">Cửa hàng</div>
-      <div class="quest-hint">Số vàng của bạn: <b>🪙 ${Number(s.gold) || 0}</b> · Hoàn thành nhiệm vụ để nhận thêm vàng</div>
-      ${body}
+    <main class="content sh">
+      <header class="sh-head">
+        <div class="sh-brand">
+          <div class="sh-logo">${SH_ICON_BAG}</div>
+          <div>
+            <div class="sh-eyebrow">NEON ARCADE</div>
+            <h1 class="sh-title">CỬA HÀNG</h1>
+          </div>
+        </div>
+        <div class="sh-gold"><span>SỐ DƯ</span><b>🪙 ${gold.toLocaleString("vi-VN")}</b></div>
+      </header>
+
+      <div class="sh-stats">
+        <div class="sh-stat gold"><div class="sh-label">SỐ VÀNG CỦA BẠN</div><div class="sh-num">🪙 ${gold.toLocaleString("vi-VN")}</div>
+          <a class="sh-link" onclick="go('quests')">Làm nhiệm vụ để nhận thêm vàng →</a></div>
+        <div class="sh-stat"><div class="sh-label">ĐANG BÁN</div><div class="sh-num">${String(items.length).padStart(2, "0")}</div>
+          <div class="sh-sub">chibi chưa sở hữu</div></div>
+        <div class="sh-stat"><div class="sh-label">ĐÃ SỞ HỮU</div><div class="sh-num">${ownedCount}<small> / ${CHIBI_GALLERY.length}</small></div>
+          <div class="sh-sub">trong bộ sưu tập</div></div>
+      </div>
+
+      <section class="sh-card-wrap">
+        <div class="sh-bar-head">
+          <div><div class="sh-sec">DANH SÁCH CHIBI</div><div class="sh-sec-sub">${shown.length} sản phẩm được hiển thị</div></div>
+          <div class="sh-seg">
+            ${filters.map(f => `<button type="button" class="${active === f.key ? "active" : ""}" onclick="setShopFilter('${f.key}')">${f.label}<em>${f.n}</em></button>`).join("")}
+          </div>
+        </div>
+        ${body}
+      </section>
     </main>
   </div>`;
 }
@@ -1902,7 +1901,9 @@ async function submitScore(finalScore){
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
+      buddyMood = "sad"; // render() ở khối finally sẽ dựng lại trang, trạng thái buồn được áp lại sau đó
       alert("Lỗi khi lưu điểm: " + (data.detail || "không rõ nguyên nhân"));
+      buddiesReact("sad", 1800);
       return null;
     }
   } catch (err) {
@@ -1992,6 +1993,7 @@ function render(){
     }
   }
   else                         app.innerHTML = homeView();
+  applyBuddyState();
 }
 
 function go(view, gameId){
@@ -2022,7 +2024,14 @@ function go(view, gameId){
   saveSession();
 }
 
-function toggle(key){ s[key] = !s[key]; render(); }
+function toggle(key, btn){
+  // Nhớ ô mật khẩu đang bấm "mắt" để trả focus lại sau khi dựng lại trang.
+  const inputId = btn && btn.previousElementSibling && btn.previousElementSibling.id;
+  s[key] = !s[key];
+  render();
+  const el = inputId && document.getElementById(inputId);
+  if (el) { el.focus(); const n = el.value.length; try { el.setSelectionRange(n, n); } catch (_) {} }
+}
 
 async function doLogin(e){
   e.preventDefault();
@@ -2033,6 +2042,7 @@ async function doLogin(e){
 
   if (username.length < 8 || password.length < 8) {
     showFieldError("loginErrorBox", "Tài khoản và mật khẩu phải có ít nhất 8 ký tự");
+    buddiesReact("sad", 1600);
     return;
   }
   showFieldError("loginErrorBox", "");
@@ -2736,7 +2746,150 @@ function profileModalHtml({ loading, error, data } = {}){
   </div>`;
 }
 
+// ================== NHÂN VẬT KHỐI MÀU Ở TRANG ĐĂNG NHẬP ==================
+// 4 nhân vật: cam, tím, đen, vàng. Khuôn mặt (mắt + mồm) trượt theo con trỏ, thân hơi nghiêng,
+// tròng đen nhìn theo chuột, thỉnh thoảng chớp mắt và "nói chuyện". Phản ứng theo form:
+//  - gõ tên đăng nhập  : cả nhóm nhìn theo con trỏ chữ trong ô, gật đầu mỗi lần gõ
+//  - nhập mật khẩu     : giơ tay che mắt
+//  - bấm hiện mật khẩu : bỏ tay ra, mở mắt tròn nhìn mật khẩu
+//  - đăng nhập sai     : lắc đầu, mồm buồn
+
+function buddyEyes(type){
+  const eye = `<div class="bd-eye"><i class="bd-pupil"></i></div>`;
+  return `<div class="bd-eyes ${type}">${eye}${eye}<b class="bd-hand l"></b><b class="bd-hand r"></b></div>`;
+}
+
+function buddiesHtml(){
+  const buddy = (cls, eyeType, mouth) => `<div class="bd ${cls}">
+      <div class="bd-shape"></div>
+      <div class="bd-face">${buddyEyes(eyeType)}<div class="bd-mouth ${mouth}"></div></div>
+    </div>`;
+  return `<div class="buddies" aria-hidden="true">
+      ${buddy("bd-purple", "sclera", "m-line")}
+      ${buddy("bd-black",  "sclera", "m-line")}
+      ${buddy("bd-yellow", "dot",    "m-line")}
+      ${buddy("bd-orange", "dot",    "m-smile")}
+    </div>`;
+}
+
+let lastMouse = null;
+
+function updateBuddies(clientX, clientY){
+  document.querySelectorAll(".buddies .bd").forEach((bd) => {
+    const r = bd.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height * 0.3; // mặt nằm ở phần trên của khối
+    const dx = clientX - cx;
+    const dy = clientY - cy;
+    const dist = Math.hypot(dx, dy) || 1;
+    const k = Math.min(1, dist / 260);          // càng xa chuột càng quay hết cỡ
+    const fx = (dx / dist) * 11 * k;            // mặt trượt ngang tối đa 11px
+    const fy = (dy / dist) * 6 * k;             // trượt dọc tối đa 6px
+    bd.style.setProperty("--fx", fx.toFixed(1) + "px");
+    bd.style.setProperty("--fy", fy.toFixed(1) + "px");
+    // thân nghiêng nhẹ về phía chuột (khối thấp như nửa tròn cam thì không nghiêng)
+    const lean = bd.classList.contains("bd-orange") ? 0 : -Math.max(-1, Math.min(1, dx / 320)) * 4;
+    bd.style.setProperty("--lean", lean.toFixed(2) + "deg");
+
+    bd.querySelectorAll(".bd-eye").forEach((eye) => {
+      const er = eye.getBoundingClientRect();
+      const ex = er.left + er.width / 2;
+      const ey = er.top + er.height / 2;
+      const a = Math.atan2(clientY - ey, clientX - ex);
+      const reach = eye.parentElement.classList.contains("dot") ? 2 : 3.5;
+      const pupil = eye.firstElementChild;
+      pupil.style.transform = `translate(${(Math.cos(a) * reach).toFixed(1)}px, ${(Math.sin(a) * reach).toFixed(1)}px)`;
+    });
+  });
+}
+
+function resetBuddies(){
+  document.querySelectorAll(".buddies .bd").forEach((bd) => {
+    bd.style.setProperty("--fx", "0px");
+    bd.style.setProperty("--fy", "0px");
+    bd.style.setProperty("--lean", "0deg");
+    bd.querySelectorAll(".bd-pupil").forEach(p => { p.style.transform = ""; });
+  });
+}
+
+// Chớp mắt / nói chuyện ngẫu nhiên. Một bộ đếm chung, dùng được dù trang bị dựng lại nhiều lần.
+setInterval(() => {
+  const now = Date.now();
+  document.querySelectorAll(".buddies .bd").forEach((bd) => {
+    if (!bd._nextBlink) { bd._nextBlink = now + 1200 + Math.random() * 3000; bd._nextTalk = now + 2500 + Math.random() * 5000; }
+    if (now >= bd._nextBlink) {
+      bd.classList.add("blink");
+      setTimeout(() => bd.classList.remove("blink"), 140);
+      bd._nextBlink = now + 2200 + Math.random() * 4500;
+    }
+    if (now >= bd._nextTalk) {
+      const m = bd.querySelector(".bd-mouth");
+      m.classList.add("talk");
+      setTimeout(() => m.classList.remove("talk"), 1400);
+      bd._nextTalk = now + 4000 + Math.random() * 7000;
+    }
+  });
+}, 200);
+
+// ---- phản ứng theo ô đang nhập ----
+let buddyFocusEl = null;   // ô input đang được focus trong trang đăng nhập / đăng ký
+let buddyMood = null;      // "sad" trong ít giây sau khi đăng nhập sai
+
+function buddyInput(t){
+  return (t && t.tagName === "INPUT" && t.closest && t.closest(".auth")) ? t : null;
+}
+
+function buddyLiveFocus(){
+  return (buddyFocusEl && document.body.contains(buddyFocusEl)) ? buddyFocusEl : null;
+}
+
+// Nhìn vào đúng vị trí con trỏ chữ trong ô (ước lượng theo số ký tự đã gõ).
+function lookAtField(el){
+  const r = el.getBoundingClientRect();
+  const x = r.left + 16 + Math.min((el.value || "").length * 8.5, Math.max(0, r.width - 60));
+  updateBuddies(x, r.top + r.height / 2);
+}
+
+function applyBuddyState(){
+  const root = document.querySelector(".buddies");
+  if (!root) return;
+  const el = buddyLiveFocus();
+  const isPw = !!el && el.type === "password";
+  const isPeek = !!el && el.classList.contains("input-pw") && el.type === "text";
+  root.classList.toggle("shy", isPw);
+  root.classList.toggle("peek", isPeek);
+  root.classList.toggle("sad", buddyMood === "sad");
+  if (el && !isPw) lookAtField(el);
+}
+
+function buddiesReact(mood, ms){
+  buddyMood = mood;
+  applyBuddyState();
+  setTimeout(() => { if (buddyMood === mood) { buddyMood = null; applyBuddyState(); } }, ms || 1800);
+}
+
+document.addEventListener("focusin", (e) => {
+  const el = buddyInput(e.target);
+  if (el) { buddyFocusEl = el; applyBuddyState(); }
+});
+document.addEventListener("focusout", (e) => {
+  if (buddyFocusEl === e.target) { buddyFocusEl = null; applyBuddyState(); }
+});
+document.addEventListener("input", (e) => {
+  const el = buddyInput(e.target);
+  if (!el) return;
+  const root = document.querySelector(".buddies");
+  if (!root) return;
+  if (el.type !== "password") lookAtField(el);
+  root.classList.remove("nod");
+  void root.offsetWidth; // chạy lại animation gật đầu
+  root.classList.add("nod");
+});
+document.addEventListener("mouseout", (e) => { if (!e.relatedTarget && !buddyLiveFocus()) resetBuddies(); });
+
 document.addEventListener("mousemove", (event) => {
+  lastMouse = { x: event.clientX, y: event.clientY };
+  if (!buddyLiveFocus()) updateBuddies(event.clientX, event.clientY);
   const pupils = document.querySelectorAll(".pupil");
   pupils.forEach((pupil) => {
     const eye = pupil.parentElement;
