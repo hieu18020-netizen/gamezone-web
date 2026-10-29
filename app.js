@@ -1495,9 +1495,35 @@ const CHIBI_GALLERY = [
     },
   },
   {
-    code: "3", name: "???", desc: "",
-    rarity: "Thường", element: null,
-    frontImage: "",
+    code: "3", name: "Tuất Vương", desc: "Chú cún vàng tinh nghịch",
+    rarity: "Thường", element: "nature",
+    frontImage: "chibi/3/frame_002.png", // chưa có chinhdien.png nên dùng tạm khung đầu
+    frameCount: 11, // chibi/3 có frame_002 .. frame_012 = 11 khung
+    // Runner đếm i = 1..frameCount, còn file bắt đầu từ frame_002 nên cộng 1.
+    frameFileName: (i) => `frame_${String(i + 1).padStart(3, "0")}.png`,
+    runnerConfig: {
+      speed: 90,          // px/giây — tốc độ chạy riêng chibi 3
+      fps: 12,            // khung hình/giây
+      baseFacing: "left", // ảnh gốc chó quay mặt sang trái
+      spriteWidth: 150,   // độ rộng hiển thị (px) — tăng số này để chó to ra, giảm để nhỏ lại
+      bottomOffset: -12,    // cách đáy màn hình (px) — số nhỏ/âm thì chó đứng thấp xuống
+    },
+  },
+  {
+    code: "4", name: "Ahri", desc: "Hồ ly chín đuôi quyến rũ",
+    rarity: "Sử thi", element: "dark",
+    frontImage: "chibi/4/chinhdien.png",
+    frameCount: 96, // chibi/4 có frame_001 .. frame_012 = 12 khung chạy
+    // Giữ nguyên tên file gốc (frame_001.png .. frame_012.png).
+    frameFileName: (i) => `frame_${String(i).padStart(3, "0")}.png`,
+    // Config riêng của chibi 4 — đổi số ở đây không ảnh hưởng chibi khác.
+    runnerConfig: {
+      speed: 80,          // px/giây — tốc độ chạy riêng của Ahri
+      fps: 12,            // khung hình/giây
+      baseFacing: "left", // ảnh gốc Ahri quay mặt/đi sang trái
+      spriteWidth: 220,   // độ rộng hiển thị (px) — tăng số này để Ahri to ra, giảm để nhỏ lại
+      bottomOffset: -4,   // cách đáy màn hình (px) — số nhỏ/âm thì Ahri đứng thấp xuống
+    },
   },
 ];
 
