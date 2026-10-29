@@ -56,9 +56,15 @@ label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.12
 .field{margin-bottom:1.15rem;position:relative}
 .field-row{display:flex;justify-content:space-between;align-items:center}
 .input{width:100%;padding:.875rem 1rem;background:#0c0f1a;color:#f8f7f4;border:1.5px solid rgba(255,255,255,.08);border-radius:8px;outline:none;transition:border-color .15s}
-.input:focus{border-color:#8b5cf6}
+.input{color-scheme:dark;background:#12162a;border:1.5px solid rgba(139,92,246,.22);border-radius:10px;font-size:14.5px;letter-spacing:.01em;box-shadow:0 1px 0 rgba(255,255,255,.04) inset}
+.input::placeholder{color:rgba(248,247,244,.35);letter-spacing:.04em}
+.input:hover{border-color:rgba(139,92,246,.45)}
+.input:focus{border-color:#8b5cf6;background:#161a30;box-shadow:0 0 0 3px rgba(139,92,246,.22)}
+/* Giữ ô nhập luôn tối khi trình duyệt tự điền (không bị trắng/xanh nhạt) */
+.input:-webkit-autofill,.input:-webkit-autofill:hover,.input:-webkit-autofill:focus,.input:-webkit-autofill:active{-webkit-text-fill-color:#f8f7f4;caret-color:#f8f7f4;-webkit-box-shadow:0 0 0 1000px #12162a inset;box-shadow:0 0 0 1000px #12162a inset;border-color:rgba(139,92,246,.45);transition:background-color 9999s ease-in-out 0s}
 .input-pw{padding-right:3rem}
-.eye{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:0;color:rgba(248,247,244,.4);padding:8px;font-size:16px;line-height:1}
+.eye{position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:0;color:rgba(248,247,244,.5);padding:8px;font-size:16px;line-height:1;border-radius:6px;transition:.15s}
+.eye:hover{color:#f8f7f4;background:rgba(255,255,255,.08)}
 
 .primary{width:100%;padding:.875rem;background:#0c0f1a;color:#8b5cf6;border:0;border-radius:8px;font-size:13px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;transition:.2s}
 .primary:not(:disabled):hover{color:#22d3ee;box-shadow:0 8px 22px rgba(139,92,246,.35);transform:translateY(-1px)}
